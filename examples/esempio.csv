@@ -1,0 +1,5 @@
+versione;tipo;id;data;ordine;cripto;quantita;prezzo_unitario_eur;commissioni_eur;data_acquisto_originale;anno_minusvalenza;importo_eur
+1;configurazione;;2026-01-01;;;;;;;;
+1;iniziale;lotto-btc-1;2026-01-01;1;BTC;0.2;40000;;2025-03-01;;
+1;acquisto;tx-btc-1;2026-01-10;2;BTC;0.1;50000;10;;;
+1;vendita;tx-btc-2;2026-02-10;3;BTC;0.05;60000;5;;;

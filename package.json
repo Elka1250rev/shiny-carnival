@@ -1,0 +1,13 @@
+{
+  "name": "shiny-carnival",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Calcolatore locale di plusvalenze e minusvalenze crypto in regime dichiarativo italiano",
+  "scripts": {
+    "test": "node tests/engine.test.js && node tests/csv.test.js && node tests/integration.test.js",
+    "check": "node scripts/check.mjs",
+    "serve": "node scripts/serve.mjs"
+  },
+  "engines": { "node": ">=22" }
+}
