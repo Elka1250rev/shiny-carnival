@@ -29,6 +29,10 @@
   <main id="main">
     <header class="topbar"><div class="breadcrumb">Portafoglio <span>/</span> <strong id="breadcrumb-view">Operazioni</strong></div><div class="topbar-actions"><button class="button button-plain" id="import-button"><span aria-hidden="true">↥</span> Importa CSV</button><button class="button button-outline" id="export-button"><span aria-hidden="true">↧</span> Esporta dati</button></div></header>
     <div class="page-content">
+      <aside class="session-notice" aria-labelledby="session-notice-title">
+        <span class="session-notice-icon" aria-hidden="true">ⓘ</span>
+        <div><strong id="session-notice-title">Il sito non registra i tuoi dati.</strong><p>Le transazioni restano solo nella memoria di questa pagina. Prima di chiudere o ricaricare, usa <strong>Esporta dati</strong> per salvare il CSV. All’inizio di ogni nuova sessione usa <strong>Importa CSV</strong> per riprendere il lavoro.</p></div>
+      </aside>
       <section class="page-heading"><div><div class="eyebrow"><span class="tiny-diamond" aria-hidden="true"></span> CHIAREZZA, OPERAZIONE DOPO OPERAZIONE</div><h1>Il tuo portafoglio.<br><span>I tuoi conti, in chiaro.</span></h1><p>Dal primo acquisto al risultato fiscale. Tutto nel tuo browser.</p></div><div class="year-picker"><label for="tax-year">ANNO D’IMPOSTA</label><select id="tax-year"><option value="2026">2026</option><option value="2025">2025</option></select><span>Regime dichiarativo · Italia</span></div></section>
       <div class="scope-note"><span aria-hidden="true">ⓘ</span><span>Calcolo per compravendite in euro di cripto-attività ordinarie, persone fisiche fuori impresa. <button class="text-button" id="scope-rules">Consulta il perimetro fiscale</button></span></div>
       <section class="metric-grid" aria-label="Riepilogo dell'anno selezionato">
