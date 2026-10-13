@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Calcolatore locale di plusvalenze e minusvalenze crypto in regime dichiarativo italiano",
   "scripts": {
-    "test": "node tests/engine.test.js && node tests/csv.test.js && node tests/integration.test.js",
+    "test": "node tests/engine.test.js && node tests/csv.test.js && node tests/integration.test.js && node tests/transaction-order.test.js",
     "check": "node scripts/check.mjs",
     "serve": "node scripts/serve.mjs"
   },

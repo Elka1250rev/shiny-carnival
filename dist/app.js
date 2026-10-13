@@ -1,6 +1,7 @@
 import { Decimal } from './decimal.js';
 import { calculate, validateDataset } from './engine.js';
 import { exportCsv, exportReportCsv, parseImport } from './csv.js';
+import { bindTransactionOrder } from './transaction-order.js';
 
 const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -156,7 +157,7 @@ function openEntry(kind = 'transactions', recordId = null) {
     fields = field('type', 'Operazione', record?.type || 'acquisto', { choices: [{ value: 'acquisto', label: 'Acquisto' }, { value: 'vendita', label: 'Vendita' }] })
       + field('asset', 'Crypto / identificatore', record?.asset || '', { maxLength: 50, hint: 'Es. BTC, ETH. Usa sempre lo stesso identificatore.' })
       + field('date', 'Data', record?.date || currentDate, { type: 'date', min: dataset.openingDate, max: '2026-12-31' })
-      + field('order', 'Sequenza nella giornata', record?.order ?? nextOrder(dataset.transactions), { type: 'number', min: 0, step: 1, hint: 'Determina l’ordine tra operazioni della stessa data.' })
+      + field('order', 'Sequenza nella giornata', record?.order ?? 1, { type: 'number', min: 0, step: 1, hint: 'Determina l’ordine tra operazioni della stessa data.' })
       + field('quantity', 'Quantità', record?.quantity || '', { decimal: true, hint: 'Puoi usare la virgola o il punto decimale.' })
       + field('unitPrice', 'Prezzo unitario (€)', record?.unitPrice || '', { decimal: true })
       + field('fees', 'Commissioni (€)', record?.fees || '0', { decimal: true, full: true, hint: 'Commissioni pagate in euro. Le commissioni in crypto richiedono un trattamento dedicato.' });
@@ -180,6 +181,9 @@ function openEntry(kind = 'transactions', recordId = null) {
     fields = field('openingDate', 'Data iniziale', dataset.openingDate, { type: 'date', min: '2025-01-01', max: '2026-12-31', full: true, hint: 'La modifica ricalcola e convalida tutti i dati esistenti.' });
   }
   $('entry-fields').innerHTML = fields;
+  if (kind === 'transactions') {
+    bindTransactionOrder($('field-date'), $('field-order'), dataset.transactions, record);
+  }
   showDialog('entry-dialog');
 }
 function readAmount(value) {
