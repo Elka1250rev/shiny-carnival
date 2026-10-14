@@ -15,9 +15,12 @@ if (createHash('sha256').update(vendor).digest('hex') !== '72c052d97b4d5d9fa6cdb
 await readFile(join(root, 'dist/vendor/pdf-lib.LICENSE.md'));
 const vendorSyntax = spawnSync(process.execPath, ['--check', vendorPath], { stdio: 'inherit' });
 if (vendorSyntax.status !== 0) process.exit(vendorSyntax.status ?? 1);
-const html = await readFile(join(root, 'dist/index.html'), 'utf8');
-for (const match of html.matchAll(/(?:src|href)="(\.\/[^"#]+)"/g)) await readFile(resolve(root, 'dist', match[1]));
+const pages = (await readdir(join(root, 'dist'))).filter(file => file.endsWith('.html'));
+for (const file of pages) {
+  const html = await readFile(join(root, 'dist', file), 'utf8');
+  for (const match of html.matchAll(/(?:src|href)="(\.\/[^"#]+)"/g)) await readFile(resolve(root, 'dist', match[1]));
+  if (!html.includes("connect-src 'none'")) throw new Error(file + ': la pagina deve impedire connessioni di rete applicative.');
+}
 const source = await Promise.all(files.map(file => readFile(join(root, 'dist', file), 'utf8')));
 if (source.some(text => /\b(?:localStorage|sessionStorage|indexedDB|XMLHttpRequest|WebSocket)\b|\bfetch\s*\(/.test(text))) throw new Error('Sono presenti API di archiviazione o rete nei moduli applicativi.');
-if (!html.includes("connect-src 'none'")) throw new Error('La pagina deve impedire connessioni di rete applicative.');
 console.log(`Controlli completati: ${files.length} moduli validi, pdf-lib locale verificata, asset disponibili, nessuna API di archiviazione o rete nei moduli applicativi.`);
