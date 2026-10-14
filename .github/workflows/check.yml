@@ -22,3 +22,34 @@ jobs:
         run: npm test
       - name: Controllo progetto
         run: npm run check
+
+  pdf-browser:
+    name: PDF in Chrome
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Strumenti di verifica PDF
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends poppler-utils fonts-noto-cjk
+          google-chrome --version
+      - name: Playwright per i test
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.58.2
+      - name: Generazione e verifica PDF nel browser
+        run: npm run test:pdf-browser
+      - name: PDF e anteprime dei casi di prova
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pdf-browser-checks
+          path: /tmp/criptoconti-pdf-checks
+          if-no-files-found: ignore
+          retention-days: 7

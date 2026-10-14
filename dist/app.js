@@ -3,6 +3,8 @@ import { calculate } from './engine.js';
 import { exportCsv, exportReportCsv, parseImport } from './csv.js';
 import { bindTransactionOrder } from './transaction-order.js';
 import { createImportSession } from './import-session.js';
+import { buildPdfReport } from './pdf-report.js';
+import { printPdfReport } from './pdf-print.js';
 
 const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -119,6 +121,7 @@ function renderLedger() {
   $('ledger-footnote').textContent = copy.footnote;
   $('asset-filter').disabled = view === 'losses';
   $('report-button').hidden = view !== 'transactions';
+  $('pdf-button').hidden = view !== 'transactions';
   document.querySelectorAll('[data-view]').forEach(button => {
     button.classList.toggle('active', button.dataset.view === view);
     if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
@@ -252,6 +255,13 @@ function exportSession() {
   try { download(exportCsv(dataset), 'criptoconti-sessione-' + new Date().toISOString().slice(0, 10) + '.csv'); notify('CSV ricaricabile esportato sul tuo dispositivo.'); }
   catch (error) { notify(errorText(error), true); }
 }
+function exportPdf() {
+  try {
+    const report = buildPdfReport(result, dataset.openingDate);
+    notify('Nella finestra di stampa scegli “Salva come PDF” per conservare il riepilogo.');
+    printPdfReport(report, 'CriptoConti-riepilogo-operazioni', { document, window });
+  } catch (error) { notify(errorText(error), true); }
+}
 function exampleDataset() {
   return { version: 1, openingDate: '2025-01-01', initialLots: [{ id: 'esempio-btc-iniziale', asset: 'BTC', acquiredOn: '2024-07-01', order: 1, quantity: '0.2', unitCost: '40000' }, { id: 'esempio-eth-iniziale', asset: 'ETH', acquiredOn: '2024-09-01', order: 2, quantity: '2', unitCost: '2400' }], transactions: [{ id: 'esempio-acquisto-btc', date: '2026-01-10', order: 1, type: 'acquisto', asset: 'BTC', quantity: '0.1', unitPrice: '50000', fees: '10' }, { id: 'esempio-vendita-eth', date: '2026-02-02', order: 2, type: 'vendita', asset: 'ETH', quantity: '0.5', unitPrice: '2100', fees: '5' }, { id: 'esempio-vendita-btc', date: '2026-02-10', order: 3, type: 'vendita', asset: 'BTC', quantity: '0.05', unitPrice: '60000', fees: '5' }, { id: 'esempio-acquisto-eth', date: '2026-03-20', order: 4, type: 'acquisto', asset: 'ETH', quantity: '0.4', unitPrice: '2200', fees: '3' }], carryLosses: [{ id: 'esempio-perdita-2024', year: 2024, amount: '100' }] };
 }
@@ -300,6 +310,7 @@ $('clear-button').addEventListener('click', () => confirm('Svuotare la sessione?
 $('confirm-action').addEventListener('click', () => { $('confirm-dialog').close(); const action = confirmationAction; confirmationAction = null; action?.(); });
 ['export-button', 'privacy-export'].forEach(name => $(name).addEventListener('click', exportSession));
 $('report-button').addEventListener('click', () => { download(exportReportCsv(result.rows), 'criptoconti-prospetto-operazioni.csv'); notify('Prospetto di tutte le operazioni esportato. Per riprendere la sessione usa “Esporta dati”.'); });
+$('pdf-button').addEventListener('click', exportPdf);
 $('demo-button').addEventListener('click', loadExample);
 $('template-button').addEventListener('click', () => download(exportCsv(exampleDataset()), 'criptoconti-esempio.csv'));
 $('import-button').addEventListener('click', openImport);
