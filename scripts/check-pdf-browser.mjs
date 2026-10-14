@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
-import { chromium } from 'playwright';
+import { chromium, devices } from 'playwright';
 import { exportCsv } from '../dist/csv.js';
 
 // These fixtures are synthetic. No financial data or external service is used.
@@ -79,37 +79,20 @@ async function importDataset(page, input, filter, filteredCount) {
   assert.equal(await page.locator('#ledger-content tbody tr').count(), filteredCount, 'The screen filter must be active before exporting all operations.');
 }
 
-async function assertPrintGeometry(page) {
-  const problems = await page.evaluate(() => {
-    const report = document.getElementById('pdf-report');
-    const bounds = report.getBoundingClientRect();
-    const issues = [];
-    if (getComputedStyle(document.documentElement).backgroundColor !== 'rgb(255, 255, 255)') issues.push('The application background must not fill unused PDF space.');
-    if (document.documentElement.scrollWidth > innerWidth + 1) issues.push('The print document overflows horizontally.');
-    for (const element of report.querySelectorAll('table, th, td, dd, .pdf-summary > div')) {
-      const box = element.getBoundingClientRect();
-      const style = getComputedStyle(element);
-      const label = element.tagName + ': ' + element.textContent.slice(0, 80);
-      if (box.left < bounds.left - 1 || box.right > bounds.right + 1) issues.push('Outside report: ' + label);
-      if (element.scrollWidth > element.clientWidth + 1) issues.push('Content overflows: ' + label);
-      if (['hidden', 'clip'].includes(style.overflowX) || style.textOverflow === 'ellipsis') issues.push('Potentially clipped: ' + label);
-      if (element.matches('td.numeric, dd')) {
-        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
-        while (walker.nextNode()) {
-          const range = document.createRange();
-          range.selectNodeContents(walker.currentNode);
-          for (const fragment of range.getClientRects()) {
-            if (fragment.left < box.left - 1 || fragment.right > box.right + 1) issues.push('Numeric text outside its cell: ' + label);
-          }
-        }
-      }
-    }
-    for (const element of document.body.children) {
-      if (element !== report && element.getBoundingClientRect().height > 0) issues.push('Application UI remains in print layout: ' + element.tagName);
-    }
-    return issues;
-  });
-  assert.deepEqual(problems, [], 'Print content must fit without clipping numbers.');
+async function assertDownloadInvalidated(page, reason) {
+  assert.equal(await page.locator('#pdf-download-notice').isVisible(), false, reason);
+  const href = await page.locator('#pdf-download-link').getAttribute('href');
+  assert.ok(!href, 'A stale PDF link must not remain usable after ' + reason);
+}
+
+async function downloadSession(page, filename) {
+  const pending = page.waitForEvent('download');
+  await page.locator('#export-button').click();
+  const download = await pending;
+  assert.equal(await download.failure(), null, 'Session CSV export must still work.');
+  const path = resolve(artifacts, filename + '.csv');
+  await download.saveAs(path);
+  return readFile(path, 'utf8');
 }
 
 function inspectPdf(path) {
@@ -141,65 +124,110 @@ function inspectPdf(path) {
   return { info, pages, text, raw, bbox, normalized };
 }
 
-async function exportPdf(page, name, expectedRows, verify) {
+async function exportPdf(page, name, expectedRows, year, verify, { retry = false } = {}) {
   const originalTitle = await page.title();
-  const previousCalls = await page.evaluate(() => window.__printCalls);
+  const sessionBefore = await downloadSession(page, name + '-session-before');
+  const ledgerBefore = await page.locator('#ledger-content').innerHTML();
+  const filterBefore = await page.locator('#asset-filter').inputValue();
+  const expectedFilename = `criptoconti-operazioni-anno-${year}.pdf`;
+  const pending = page.waitForEvent('download', { timeout: 20000 });
   await page.locator('#pdf-button').click();
-  await page.waitForFunction(() => document.body.classList.contains('pdf-export'));
-  assert.equal(await page.evaluate(() => window.__printCalls), previousCalls + 1, 'The UI must invoke the browser print command once.');
-  assert.equal(await page.locator('#pdf-report .pdf-operations tbody tr').count(), expectedRows, 'The PDF must contain every operation despite the screen filter.');
-  assert.notEqual(await page.title(), originalTitle, 'The PDF should use its own document title.');
-  await page.emulateMedia({ media: 'print' });
-  await page.evaluate(() => document.fonts.ready);
-  await assertPrintGeometry(page);
-  await page.screenshot({ path: resolve(artifacts, name + '.png') });
+  const download = await pending;
+  assert.equal(await download.failure(), null, 'The generated PDF must be downloadable.');
+  assert.equal(download.suggestedFilename(), expectedFilename, 'The download name must identify the selected tax year.');
   const path = resolve(artifacts, name + '.pdf');
-  await page.pdf({ path, preferCSSPageSize: true, printBackground: true, timeout: 20000 });
-  // This must be Chrome's real print lifecycle, never a simulated afterprint event.
-  await page.waitForFunction(() => !document.body.classList.contains('pdf-export'), null, { timeout: 5000 });
-  assert.equal(await page.evaluate(() => document.getElementById('pdf-report').hidden), true, 'afterprint must hide the temporary report.');
-  assert.equal(await page.locator('#pdf-report').innerHTML(), '', 'afterprint must remove the temporary financial snapshot.');
-  assert.equal(await page.title(), originalTitle, 'afterprint must restore the application title.');
-  await page.emulateMedia({ media: 'screen' });
-  assert.equal(await page.locator('#pdf-button').isVisible(), true, 'The session must remain usable after PDF generation.');
+  await download.saveAs(path);
+  const bytes = await readFile(path);
+  assert.equal(bytes.subarray(0, 5).toString(), '%PDF-', 'Export must download real PDF bytes.');
+  await page.waitForFunction(() => !document.getElementById('pdf-button').disabled);
+  assert.equal(await page.evaluate(() => window.__printCalls), 0, 'Export must not depend on window.print, which is unavailable on Chrome Android.');
+  assert.equal(await page.title(), originalTitle, 'Export must preserve the application title.');
+  assert.equal(await page.locator('#ledger-content').innerHTML(), ledgerBefore, 'Export must not alter the visible operations.');
+  assert.equal(await page.locator('#asset-filter').inputValue(), filterBefore, 'Export must preserve the active screen filter.');
+  assert.equal(await page.locator('#pdf-download-notice').isVisible(), true, 'The user must have a visible link to download again.');
+  assert.ok((await page.locator('#pdf-download-status').textContent()).trim(), 'The ready PDF must have a visible status.');
+  assert.equal(await page.locator('#pdf-download-link').getAttribute('download'), expectedFilename);
+  const href = await page.locator('#pdf-download-link').getAttribute('href');
+  assert.match(href, /^blob:/, 'The PDF link must refer to bytes generated locally.');
+  assert.equal(await page.locator('#pdf-download-link').getAttribute('target'), '_blank');
+  await page.locator('#pdf-download-notice').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: resolve(artifacts, name + '-ui.png') });
+
+  if (retry) {
+    const repeated = page.waitForEvent('download');
+    await page.locator('#pdf-download-link').click();
+    const retryDownload = await repeated;
+    assert.equal(await retryDownload.failure(), null);
+    assert.equal(retryDownload.suggestedFilename(), expectedFilename);
+    const retryPath = resolve(artifacts, name + '-retry.pdf');
+    await retryDownload.saveAs(retryPath);
+    assert.deepEqual(await readFile(retryPath), bytes, 'The visible retry link must download the same PDF without regenerating it.');
+    assert.equal(await page.locator('#pdf-download-link').getAttribute('href'), href);
+  }
+
+  assert.equal(await downloadSession(page, name + '-session-after'), sessionBefore, 'PDF export must preserve every field in the recoverable session.');
   const pdf = inspectPdf(path);
+  assert.match(pdf.normalized, new RegExp(`Operazioni: ${expectedRows}\\.`), 'The PDF must include all operations despite the active screen filter.');
   await Promise.all([
     writeFile(resolve(artifacts, name + '.txt'), pdf.text),
     writeFile(resolve(artifacts, name + '.bbox.html'), pdf.bbox),
   ]);
+  // Preview the actual downloaded PDF, not a browser print emulation.
+  execFileSync('pdftoppm', ['-f', '1', '-singlefile', '-scale-to', '1600', '-png', path, resolve(artifacts, name + '-preview')], { timeout: 20000, maxBuffer: 1024 * 1024 });
   verify(pdf);
-  results.push({ name, operations: expectedRows, pages: pdf.pages });
-  console.log(`PASS ${name}: ${expectedRows} operations, ${pdf.pages} PDF page(s), real afterprint cleanup.`);
+  results.push({ name, operations: expectedRows, pages: pdf.pages, bytes: bytes.length, filename: download.suggestedFilename(), retryVerified: retry });
+  console.log(`PASS ${name}: downloaded ${expectedRows} operations on ${pdf.pages} PDF page(s), session preserved.`);
+}
+
+const externalRequests = [];
+const contexts = [];
+async function newPage(options, label) {
+  const context = await browser.newContext({ ...options, locale: 'it-IT', acceptDownloads: true });
+  contexts.push(context);
+  context.on('request', request => {
+    const url = request.url();
+    if (/^https?:/u.test(url) && new URL(url).origin !== address) externalRequests.push(label + ': ' + url);
+  });
+  context.on('page', page => page.on('pageerror', error => errors.push(label + ': ' + error.message)));
+  await context.addInitScript(() => {
+    window.__printCalls = 0;
+    window.__cspViolations = [];
+    window.print = () => { window.__printCalls += 1; throw new Error('PDF export must not call window.print.'); };
+    document.addEventListener('securitypolicyviolation', event => {
+      window.__cspViolations.push({ directive: event.effectiveDirective, blocked: event.blockedURI });
+    });
+  });
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  await page.goto(address, { waitUntil: 'networkidle', timeout: 15000 });
+  return page;
 }
 
 try {
   await waitForServer();
   browser = await chromium.launch({ channel: 'chrome', headless: true, timeout: 20000 });
-  // A4 landscape content width: (297 - 2 * 12) mm at 96 CSS pixels/inch.
-  const page = await browser.newPage({ viewport: { width: 1032, height: 703 }, locale: 'it-IT' });
-  page.setDefaultTimeout(10000);
-  page.on('pageerror', error => errors.push(error.message));
-  await page.addInitScript(() => {
-    window.__printCalls = 0;
-    window.print = () => { window.__printCalls += 1; };
-  });
-  await page.goto(address, { waitUntil: 'networkidle', timeout: 15000 });
+  // This exercises mobile layout, touch input and actual downloads in Chrome.
+  // It emulates an Android device; it does not claim to run the Android OS download manager.
+  const page = await newPage(devices['Pixel 7'], 'mobile');
+  assert.match(await page.evaluate(() => navigator.userAgent), /Android/);
+  assert.equal(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), true);
 
   await importDataset(page, mixed, 'BTC', 2);
-  await exportPdf(page, 'mixed-2026', 5, pdf => {
+  await exportPdf(page, 'mixed-2026', 5, 2026, pdf => {
     assert.match(pdf.normalized, /anno 2026/);
     assert.match(pdf.normalized, /33%/);
     assert.match(pdf.normalized, /6,60 €/);
     assert.match(pdf.normalized, /Plusvalenza\s+\+50,00 €/);
     assert.match(pdf.normalized, /Plusvalenza\s+\+45,00 €/);
-    assert.match(pdf.normalized, /Minusvalenza\s+−25,00 €/);
+    assert.match(pdf.normalized, /Minusvalenza\s+[-−]25,00 €/);
     assert.match(pdf.normalized, /Pareggio\s+0,00 €/);
     assert.match(pdf.normalized, /Nessun realizzo/);
     assert.match(pdf.normalized, /石油/);
     assert.ok(withoutSpaces(pdf.raw).includes('0,123456789012345678'), 'All 18 decimal places must survive actual PDF rendering.');
-  });
+  }, { retry: true });
   await page.locator('#tax-year').selectOption('2025');
-  await exportPdf(page, 'mixed-2025-reexport', 5, pdf => {
+  await assertDownloadInvalidated(page, 'changing the selected tax year');
+  await exportPdf(page, 'mixed-2025-reexport', 5, 2025, pdf => {
     assert.match(pdf.normalized, /anno 2025/);
     assert.match(pdf.normalized, /26%/);
     assert.match(pdf.normalized, /13,00 €/);
@@ -207,8 +235,11 @@ try {
   });
 
   await importDataset(page, longHistory, 'ASSET249', 1);
-  await exportPdf(page, 'multipage-250', 250, pdf => {
-    assert.ok(pdf.pages > 2, '250 operations must exercise multiple printed pages.');
+  await assertDownloadInvalidated(page, 'importing a different dataset');
+  const desktop = await newPage({ viewport: { width: 1280, height: 900 } }, 'desktop');
+  await importDataset(desktop, longHistory, 'ASSET249', 1);
+  await exportPdf(desktop, 'multipage-250', 250, 2026, pdf => {
+    assert.ok(pdf.pages > 2, '250 operations must exercise multiple PDF pages.');
     for (let index = 0; index < 250; index += 1) {
       const asset = 'ASSET' + String(index).padStart(3, '0');
       assert.equal(occurrences(pdf.text, asset), 1, asset + ' must appear exactly once in the actual PDF.');
@@ -224,8 +255,9 @@ try {
     }
   });
 
-  await importDataset(page, hugeNumbers, '', 1);
-  await exportPdf(page, 'large-numbers', 1, pdf => {
+  await importDataset(desktop, hugeNumbers, '', 1);
+  await assertDownloadInvalidated(desktop, 'importing a different dataset');
+  await exportPdf(desktop, 'large-numbers', 1, 2026, pdf => {
     const raw = withoutSpaces(pdf.raw);
     assert.ok(raw.includes('999.999.999.999.999.999.999.999.999.999,123456789012345678'), 'The 30-digit quantity and all 18 decimal places must be readable.');
     assert.ok(raw.includes('999.999.999.999.999.999.999.999.999.999,12€'), 'The whole large amount must be readable, including its cents.');
@@ -233,7 +265,13 @@ try {
     assert.ok(raw.includes(hugeAsset), 'The maximum-length asset name must not be truncated.');
   });
   assert.deepEqual(errors, [], 'The browser must not report JavaScript errors.');
-  await writeFile(resolve(artifacts, 'results.json'), JSON.stringify({ browser: browser.version(), elapsedSeconds: (Date.now() - started) / 1000, cases: results }, null, 2));
+  assert.deepEqual(externalRequests, [], 'PDF export must not send requests outside the local application.');
+  for (const context of contexts) {
+    for (const openPage of context.pages()) {
+      assert.deepEqual(await openPage.evaluate(() => window.__cspViolations), [], 'The application must preserve its Content Security Policy without violations.');
+    }
+  }
+  await writeFile(resolve(artifacts, 'results.json'), JSON.stringify({ browser: browser.version(), mobileDevice: 'Pixel 7 emulation', elapsedSeconds: (Date.now() - started) / 1000, cases: results }, null, 2));
   console.log(`PDF browser checks completed; artifacts: ${artifacts}`);
 } finally {
   if (browser) await browser.close();
