@@ -84,6 +84,7 @@ async function assertPrintGeometry(page) {
     const report = document.getElementById('pdf-report');
     const bounds = report.getBoundingClientRect();
     const issues = [];
+    if (getComputedStyle(document.documentElement).backgroundColor !== 'rgb(255, 255, 255)') issues.push('The application background must not fill unused PDF space.');
     if (document.documentElement.scrollWidth > innerWidth + 1) issues.push('The print document overflows horizontally.');
     for (const element of report.querySelectorAll('table, th, td, dd, .pdf-summary > div')) {
       const box = element.getBoundingClientRect();
