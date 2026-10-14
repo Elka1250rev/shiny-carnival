@@ -11,6 +11,7 @@ L'applicazione è statica: i dati inseriti rimangono nella memoria della pagina.
 - Per ogni operazione: quantità e prezzo medio prima e dopo, costo fiscale attribuito alla vendita e plusvalenza o minusvalenza fiscale.
 - Riepilogo per il 2025 e il 2026, con compensazione delle minusvalenze pregresse dichiarate e ancora disponibili.
 - Importazione CSV con anteprima e validazione, esportazione dei dati ricaricabili e CSV separato del prospetto dei risultati.
+- Riepilogo PDF con plusvalenza o minusvalenza per ogni operazione e riepilogo fiscale dell'anno selezionato.
 - Importatori separati dal modello e dal calcolo, per aggiungere in seguito altri formati. Excel non è implementato.
 
 Il **prezzo medio ponderato gestionale** e il **costo fiscale LIFO** sono due valori distinti. Una vendita lascia invariato il prezzo medio gestionale finché rimangono unità; il calcolo fiscale consuma invece i lotti più recenti. Il dettaglio delle regole e dei limiti è in [docs/FISCALITA.md](docs/FISCALITA.md).
@@ -30,7 +31,7 @@ npm test
 npm run check
 ```
 
-I test verificano aritmetica, motore di calcolo, formato CSV, importazione asincrona e sequenza delle operazioni; il controllo aggiuntivo verifica i file del progetto. Il workflow **Controlli** esegue entrambi i comandi con Node.js 24 sui push e sulle pull request.
+I test verificano aritmetica, motore di calcolo, formato CSV, importazione asincrona, sequenza delle operazioni e riepilogo PDF; il controllo aggiuntivo verifica i file del progetto. Il workflow **Controlli** esegue entrambi i comandi con Node.js 24 sui push e sulle pull request.
 
 ## Modifiche al progetto
 
@@ -39,6 +40,10 @@ Usare un branch dedicato per ogni modifica e aprire una pull request verso `main
 ## Dati ed esportazione
 
 L'esportazione dei dati salva la configurazione, i lotti iniziali, le transazioni e le minusvalenze pregresse. Importando quel file si ricostruiscono i risultati con le regole dell'applicazione. Il CSV del prospetto è invece destinato alla consultazione e non è un file ricaricabile.
+
+Nella sezione **Operazioni**, il pulsante **Esporta PDF** apre la finestra di stampa del browser: selezionare **Salva come PDF** come destinazione. Il prospetto è predisposto in A4 orizzontale e contiene tutte le operazioni della sessione, anche con un filtro di ricerca attivo. Per ciascuna riga mostra quantità, commissioni, ricavo netto, costo di acquisto o costo fiscale LIFO e plusvalenza/minusvalenza; gli acquisti sono indicati come **Nessun realizzo**. Il riepilogo fiscale riguarda soltanto l'anno selezionato e conserva le avvertenze del calcolo.
+
+Il PDF è creato tramite la stampa locale del browser e serve alla consultazione. Per riprendere il lavoro usare il CSV ottenuto con **Esporta dati**. Chiudere o annullare la finestra di stampa lascia intatti i dati della sessione.
 
 Il formato usa UTF-8, separatore `;`, date `AAAA-MM-GG` e punto decimale senza separatori delle migliaia. La specifica è in [docs/CSV.md](docs/CSV.md); [examples/esempio.csv](examples/esempio.csv) contiene un portafoglio minimo da importare.
 

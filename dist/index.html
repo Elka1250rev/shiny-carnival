@@ -9,6 +9,7 @@
   <title>CriptoConti — Ogni operazione, un conto chiaro</title>
   <link rel="icon" href="./favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./pdf-report.css">
   <script type="module" src="./app.js"></script>
 </head>
 <body>
@@ -44,7 +45,7 @@
       <div class="workspace-grid">
         <section class="panel ledger-panel" aria-labelledby="view-title">
           <div class="panel-heading"><div><div class="eyebrow small" id="view-eyebrow">IL DIARIO DEL PORTAFOGLIO</div><h2 id="view-title">Le tue operazioni <span class="count-badge" id="record-count">0</span></h2></div><button class="button button-dark" id="add-button"><span aria-hidden="true">+</span> Nuova operazione</button></div>
-          <div class="ledger-toolbar"><div class="search-field"><span aria-hidden="true">⌕</span><label class="sr-only" for="asset-filter">Filtra per crypto</label><input id="asset-filter" type="search" placeholder="Cerca una crypto…" autocomplete="off"></div><button class="text-button" id="report-button"><span aria-hidden="true">↧</span> Scarica prospetto</button></div>
+          <div class="ledger-toolbar"><div class="search-field"><span aria-hidden="true">⌕</span><label class="sr-only" for="asset-filter">Filtra per crypto</label><input id="asset-filter" type="search" placeholder="Cerca una crypto…" autocomplete="off"></div><div class="report-actions"><button class="text-button" id="report-button"><span aria-hidden="true">↧</span> Prospetto CSV</button><button class="text-button" id="pdf-button" title="Tutte le operazioni. Nella finestra di stampa scegli Salva come PDF."><span aria-hidden="true">↧</span> Esporta PDF</button></div></div>
           <div id="ledger-content"></div>
           <div class="panel-footer"><span id="ledger-footnote">Le operazioni sono ordinate per data e sequenza.</span><button class="text-button" id="demo-button">Prova con un esempio <span aria-hidden="true">↗</span></button></div>
         </section>
@@ -66,5 +67,6 @@
   <dialog id="detail-dialog" class="modal modal-wide"><div class="modal-heading"><div><div class="eyebrow small">IL DETTAGLIO DEL CALCOLO</div><h2 id="detail-title">Dettaglio operazione</h2></div><button class="icon-button" data-close="detail-dialog" aria-label="Chiudi">×</button></div><div id="detail-content"></div><div class="modal-actions"><button class="button button-dark" data-close="detail-dialog">Chiudi</button></div></dialog>
   <dialog id="confirm-dialog" class="modal modal-small"><div class="modal-heading"><h2 id="confirm-title">Conferma</h2><button class="icon-button" data-close="confirm-dialog" aria-label="Chiudi">×</button></div><p id="confirm-description" class="modal-description"></p><div class="modal-actions"><button class="button button-outline" data-close="confirm-dialog">Annulla</button><button class="button button-dark" id="confirm-action">Conferma</button></div></dialog>
   <noscript><p class="noscript">Per eseguire i calcoli nel tuo browser è necessario abilitare JavaScript.</p></noscript>
+  <section class="pdf-report" id="pdf-report" aria-label="Riepilogo delle operazioni da salvare in PDF" hidden></section>
 </body>
 </html>

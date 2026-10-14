@@ -1,0 +1,77 @@
+.ledger-toolbar { flex-wrap: wrap; }
+.report-actions { display: flex; flex-wrap: wrap; gap: 15px; }
+.report-actions .text-button { white-space: nowrap; }
+.pdf-report { display: none; }
+
+@media (max-width: 480px) {
+  .ledger-toolbar { gap: 12px; }
+  .ledger-toolbar .search-field { max-width: none; width: 100%; }
+}
+
+@media print {
+  @page { size: A4 landscape; margin: 12mm; }
+  body.pdf-export {
+    margin: 0;
+    padding: 0;
+    background: white;
+    color: #17251b;
+  }
+  body.pdf-export > :not(#pdf-report) { display: none !important; }
+  body.pdf-export > #pdf-report {
+    display: block !important;
+    font: 9pt/1.45 Arial, sans-serif;
+    overflow-wrap: anywhere;
+  }
+  .pdf-report * { box-sizing: border-box; }
+  .pdf-report h1 { font-size: 20pt; margin: 0 0 4mm; letter-spacing: -.3pt; }
+  .pdf-report h2 { font-size: 13pt; margin: 6mm 0 3mm; }
+  .pdf-header { break-inside: avoid; page-break-inside: avoid; }
+  .pdf-header p { margin: 2mm 0; }
+  .pdf-summary {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 3mm 5mm;
+    margin: 0 0 5mm;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  .pdf-summary > div { border: 1px solid #cbd3c9; padding: 3mm; }
+  .pdf-summary dt { font-size: 8pt; color: #44543e; }
+  .pdf-summary dd { font-size: 12pt; font-weight: bold; margin: 1mm 0 0; }
+  .pdf-report .pdf-operations {
+    border-collapse: collapse;
+    table-layout: fixed;
+    width: 100%;
+    white-space: normal;
+    margin: 4mm 0;
+  }
+  .pdf-operations caption { text-align: left; font-weight: bold; font-size: 12pt; margin-bottom: 3mm; }
+  .pdf-operations thead { display: table-header-group; }
+  .pdf-operations tr { break-inside: avoid; page-break-inside: avoid; }
+  .pdf-report .pdf-operations th,
+  .pdf-report .pdf-operations td {
+    padding: 2.5mm 2mm;
+    border: 1px solid #cbd3c9;
+    color: #17251b;
+    font-size: 8pt;
+    font-weight: normal;
+    letter-spacing: normal;
+    line-height: 1.5;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+    white-space: normal;
+  }
+  .pdf-report .pdf-operations th { font-weight: bold; background: #edf2e9; }
+  .pdf-operations th:nth-child(1) { width: 9%; }
+  .pdf-operations th:nth-child(2) { width: 12%; }
+  .pdf-operations th:nth-child(3) { width: 10%; }
+  .pdf-operations th:nth-child(4) { width: 15%; }
+  .pdf-operations th:nth-child(5) { width: 9%; }
+  .pdf-operations th:nth-child(6) { width: 14%; }
+  .pdf-operations th:nth-child(7) { width: 14%; }
+  .pdf-operations th:nth-child(8) { width: 17%; }
+  .pdf-report .numeric { text-align: right; font-variant-numeric: tabular-nums; }
+  .pdf-note, .pdf-disclaimer, .pdf-empty, .pdf-warnings { font-size: 8pt; line-height: 1.6; }
+  .pdf-warnings { padding-left: 5mm; }
+  .pdf-disclaimer { border-top: 1px solid #cbd3c9; padding-top: 3mm; margin-top: 5mm; }
+}
