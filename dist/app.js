@@ -1,7 +1,8 @@
 import { Decimal } from './decimal.js';
-import { calculate, validateDataset } from './engine.js';
+import { calculate } from './engine.js';
 import { exportCsv, exportReportCsv, parseImport } from './csv.js';
 import { bindTransactionOrder } from './transaction-order.js';
+import { createImportSession } from './import-session.js';
 
 const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -10,7 +11,11 @@ let dataset = freshDataset();
 let selectedYear = 2026;
 let view = 'transactions';
 let editing = null;
-let pendingImport = null;
+const importSession = createImportSession((content, name) => {
+  const imported = parseImport(content, name);
+  calculate(imported, Math.max(selectedYear, Number(imported.openingDate.slice(0, 4))));
+  return imported;
+});
 let confirmationAction = null;
 let toastTimer;
 let result = calculate(dataset, selectedYear);
@@ -256,28 +261,25 @@ function loadExample() {
   else load();
 }
 function openImport() {
-  pendingImport = null;
   $('import-file').value = '';
-  $('import-preview').hidden = true;
-  $('import-error').hidden = true;
-  $('confirm-import').disabled = true;
+  resetImport();
   showDialog('import-dialog');
 }
-async function readFile(file) {
-  pendingImport = null;
+function resetImport() {
+  importSession.reset();
   $('import-preview').hidden = true;
   $('import-error').hidden = true;
   $('confirm-import').disabled = true;
+}
+async function readFile(file) {
+  resetImport();
   try {
-    if (file.size > 5 * 1024 * 1024) throw new Error('Il file supera il limite di 5 MB.');
-    const imported = parseImport(await file.text(), file.name);
-    const errors = validateDataset(imported);
-    if (errors.length) { const error = new Error('Dati non validi'); error.errors = errors; throw error; }
-    calculate(imported, Math.max(selectedYear, Number(imported.openingDate.slice(0, 4))));
-    pendingImport = imported;
+    const selection = await importSession.read(file);
+    if (!selection) return;
+    const imported = selection.dataset;
     $('import-preview').textContent = '';
     const heading = document.createElement('strong');
-    heading.textContent = 'File valido: ' + file.name;
+    heading.textContent = 'File valido: ' + selection.name;
     const details = document.createElement('div');
     details.textContent = `${imported.initialLots.length} lotti iniziali · ${imported.transactions.length} operazioni · ${imported.carryLosses.length} minusvalenze pregresse. Situazione iniziale: ${dateLabel(imported.openingDate)}.`;
     $('import-preview').append(heading, details);
@@ -301,8 +303,9 @@ $('report-button').addEventListener('click', () => { download(exportReportCsv(re
 $('demo-button').addEventListener('click', loadExample);
 $('template-button').addEventListener('click', () => download(exportCsv(exampleDataset()), 'criptoconti-esempio.csv'));
 $('import-button').addEventListener('click', openImport);
-$('import-file').addEventListener('change', event => { if (event.target.files[0]) readFile(event.target.files[0]); });
-$('confirm-import').addEventListener('click', () => { if (!pendingImport) return; try { commit(pendingImport, 'Sessione importata. Tutti i risultati sono stati ricalcolati.'); pendingImport = null; $('import-dialog').close(); } catch (error) { $('import-error').textContent = errorText(error); $('import-error').hidden = false; } });
+$('import-dialog').addEventListener('close', resetImport);
+$('import-file').addEventListener('change', event => { if (event.target.files[0]) readFile(event.target.files[0]); else resetImport(); });
+$('confirm-import').addEventListener('click', () => { if (!importSession.pending) return; try { commit(importSession.pending, 'Sessione importata. Tutti i risultati sono stati ricalcolati.'); resetImport(); $('import-dialog').close(); } catch (error) { $('import-error').textContent = errorText(error); $('import-error').hidden = false; } });
 ['dragover', 'dragenter'].forEach(eventName => $('drop-zone').addEventListener(eventName, event => { event.preventDefault(); $('drop-zone').classList.add('dragover'); }));
 ['dragleave', 'drop'].forEach(eventName => $('drop-zone').addEventListener(eventName, event => { event.preventDefault(); $('drop-zone').classList.remove('dragover'); if (eventName === 'drop' && event.dataTransfer.files[0]) readFile(event.dataTransfer.files[0]); }));
 $('ledger-content').addEventListener('click', event => {

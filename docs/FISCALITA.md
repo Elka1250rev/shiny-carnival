@@ -45,6 +45,8 @@ Un saldo unico con prezzo medio non permette di ricostruire automaticamente il L
 
 L'ordine delle operazioni dello stesso giorno deve riflettere la loro sequenza effettiva. Una vendita superiore alla disponibilità produce un errore; non vengono simulati saldi negativi o vendite allo scoperto.
 
+I lotti della situazione iniziale precedono tutte le operazioni inserite, anche quando la data originaria di acquisto coincide con la data di apertura. La sequenza dei lotti iniziali ordina soltanto quei lotti per asset e data; la sequenza delle operazioni è distinta e può ripartire da 1. Per esempio, con un lotto iniziale acquistato nella data di apertura a 100 euro e un nuovo acquisto nella stessa data a 200 euro, la vendita successiva utilizza per primo il nuovo acquisto da 200 euro, qualunque sia la sequenza assegnata al lotto iniziale.
+
 ## Minusvalenze e compensazione
 
 Il motore somma algebricamente le plusvalenze e le minusvalenze del periodo. Compensa un saldo positivo con le minusvalenze della stessa categoria fiscale, già dichiarate e ancora utilizzabili, partendo da quelle che scadono prima.

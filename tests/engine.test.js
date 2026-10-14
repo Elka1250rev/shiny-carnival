@@ -233,3 +233,123 @@ test('an incomplete-year snapshot warns and calculations do not mutate the datas
   assert.equal(JSON.stringify(input), original);
   assert.deepEqual(calculate(dataset(), 2025).tax, { year: 2025, rate: 26, gains: '0', losses: '0', net: '0', currentLoss: '0', lossesUsed: '0', taxable: '0', tax: '0.00', remainingLosses: [], expiredLosses: [] });
 });
+
+test('opening lots precede purchases on the opening day regardless of their separate sequence', () => {
+  const input = dataset({
+    initialLots: [lot('opening', { acquiredOn: '2025-01-01', order: 10, unitCost: '100' })],
+    transactions: [
+      buy('purchase', { date: '2025-01-01', order: 1, unitPrice: '200' }),
+      sell('sale', { date: '2025-01-01', order: 2, unitPrice: '300' }),
+    ],
+  });
+  const result = calculate(input, 2025);
+  assert.equal(result.rows[1].costBasis, '200');
+  assert.equal(result.rows[1].fiscalResult, '100');
+  assert.deepEqual(result.rows[1].lotDetails.map(value => value.lotId), ['purchase']);
+  assert.equal(result.holdings[0].fiscalCost, '100');
+  assert.equal(result.tax.tax, '26.00');
+});
+
+test('opening-lot sequences and transaction sequences are separate and both retain LIFO order', () => {
+  const input = dataset({
+    initialLots: [
+      lot('older', { acquiredOn: '2025-01-01', order: 0, unitCost: '100' }),
+      lot('newer', { acquiredOn: '2025-01-01', order: 1, unitCost: '300' }),
+    ],
+    transactions: [
+      buy('purchase', { date: '2025-01-01', order: 0, unitPrice: '200' }),
+      sell('sale', { date: '2025-01-01', order: 1, quantity: '2.5', unitPrice: '400' }),
+    ],
+  });
+  assert.deepEqual(validateDataset(input), []);
+  const result = calculate(input, 2025);
+  assert.deepEqual(result.rows[1].lotDetails.map(value => [value.lotId, value.quantity]), [
+    ['purchase', '1'], ['newer', '1'], ['older', '0.5'],
+  ]);
+  assert.equal(result.rows[1].costBasis, '550');
+  assert.equal(result.rows[1].fiscalResult, '450');
+  assert.equal(result.holdings[0].fiscalCost, '50');
+});
+
+test('invalid opening dates return validation errors even when the tax year is omitted', () => {
+  for (const openingDate of [123, {}, true, null, undefined, [], 'invalid']) {
+    assert.throws(() => calculate(dataset({ openingDate })), error => error instanceof ValidationError
+      && error.errors.some(value => value.location === 'openingDate'), String(openingDate));
+  }
+  assert.equal(calculate(dataset()).tax.year, 2025);
+  assert.equal(calculate(dataset({ openingDate: '2026-01-01' })).tax.year, 2026);
+});
+
+test('historical acquisition dates reject year zero and impossible leap days', () => {
+  for (const acquiredOn of ['0000-01-01', '2023-02-29', '1900-02-29']) {
+    const input = dataset({ initialLots: [lot('opening', { acquiredOn })] });
+    assert.ok(validateDataset(input).some(value => value.location === 'initialLots[0].acquiredOn'), acquiredOn);
+    assert.throws(() => calculate(input, 2025), ValidationError);
+  }
+  assert.deepEqual(validateDataset(dataset({ initialLots: [lot('opening', { acquiredOn: '2024-02-29' })] })), []);
+});
+
+test('buying again after full liquidation starts fresh management and fiscal costs', () => {
+  const input = dataset({
+    initialLots: [lot('opening', { quantity: '2', unitCost: '100' })],
+    transactions: [
+      buy('purchase', { order: 1, unitPrice: '200' }),
+      sell('liquidation', { order: 2, quantity: '3', unitPrice: '150' }),
+      buy('repurchase', { order: 3, unitPrice: '50', fees: '1' }),
+      sell('partial', { order: 4, quantity: '0.4', unitPrice: '100', fees: '1' }),
+    ],
+  });
+  const result = calculate(input, 2025);
+  assert.equal(result.rows[1].afterQuantity, '0');
+  assert.equal(result.rows[2].beforeAverage, '0');
+  assert.equal(result.rows[3].costBasis, '20.4');
+  assert.equal(result.rows[3].fiscalResult, '18.6');
+  assert.equal(result.rows[3].managementResult, '18.6');
+  assert.deepEqual(result.rows[3].lotDetails.map(value => value.lotId), ['repurchase']);
+  assert.deepEqual(result.holdings[0], { asset: 'BTC', quantity: '0.6', average: '51', cost: '30.6', fiscalCost: '30.6', fiscalAverage: '51' });
+  assert.equal(result.tax.tax, '17.84');
+});
+
+test('same-category crypto gains and losses offset across different assets', () => {
+  const result = calculate(dataset({
+    initialLots: [lot('btc', { unitCost: '100' }), lot('eth', { asset: 'ETH', unitCost: '500' })],
+    transactions: [sell('gain', { order: 1, unitPrice: '400' }), sell('loss', { order: 2, asset: 'ETH', unitPrice: '100' })],
+    carryLosses: [{ id: 'previous', year: 2024, amount: '50' }],
+  }), 2025);
+  assert.equal(result.tax.gains, '300');
+  assert.equal(result.tax.losses, '400');
+  assert.equal(result.tax.net, '-100');
+  assert.equal(result.tax.lossesUsed, '0');
+  assert.equal(result.tax.tax, '0.00');
+  assert.deepEqual(result.tax.remainingLosses, [
+    { originYear: 2024, expiresYear: 2028, amount: '50' },
+    { originYear: 2025, expiresYear: 2029, amount: '100' },
+  ]);
+});
+
+test('retained fiscal cost conserves purchase costs through partial sales and exact fee allocation', () => {
+  const input = dataset({
+    initialLots: [lot('opening', { quantity: '2', unitCost: '10' })],
+    transactions: [
+      buy('first-buy', { order: 1, quantity: '3', unitPrice: '20', fees: '1' }),
+      sell('first-sale', { order: 2, quantity: '1', unitPrice: '30', fees: '0.2' }),
+      buy('second-buy', { order: 3, quantity: '2', unitPrice: '40', fees: '0.5' }),
+      sell('second-sale', { order: 4, quantity: '2.5', unitPrice: '60', fees: '1' }),
+      buy('other-asset', { order: 5, asset: 'ETH', quantity: '1', unitPrice: '10', fees: '1' }),
+    ],
+  });
+  const result = calculate(input, 2025);
+  const btc = result.holdings.find(value => value.asset === 'BTC');
+  // Purchase basis: 20 + 61 + 80.5. Sold basis: 61/3 + (80.5 + 61/6).
+  // Remaining lots are the initial 2 at 10 and 1.5 units from the first purchase at 61/3.
+  assert.equal(btc.fiscalCost, '50.5');
+  assert.equal(btc.fiscalAverage, Decimal.from('50.5').div('3.5').toString());
+  assert.equal(result.rows[1].fiscalAfterAverage, Decimal.from('91').div('6').toString());
+  assert.equal(result.rows[2].fiscalAfterAverage, Decimal.from('847').div('36').toString());
+  assert.equal(result.holdings.find(value => value.asset === 'ETH').fiscalCost, '11');
+  input.transactions.push(sell('liquidation', { order: 6, quantity: '3.5', unitPrice: '100', fees: '0.3' }));
+  const liquidated = calculate(input, 2025);
+  assert.equal(liquidated.rows.at(-1).costBasis, '50.5');
+  assert.equal(liquidated.holdings.find(value => value.asset === 'BTC').fiscalCost, '0');
+  assert.equal(liquidated.holdings.find(value => value.asset === 'ETH').fiscalCost, '11');
+});
