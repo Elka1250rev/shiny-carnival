@@ -215,7 +215,10 @@ try {
     const operationPages = pdf.text.split('\f').filter(text => /ASSET\d{3}/.test(text));
     assert.ok(operationPages.length > 2);
     for (const text of operationPages) {
-      assert.match(compact(text), /Data\s*\/\s*sequenza/, 'The table header must repeat on every page containing operations.');
+      // -layout preserves visual lines: other columns can occur between the two
+      // lines of "Data / sequenza". Check both header fragments on each page.
+      assert.match(text, /\bData\s*\//, 'The date header must repeat on every page containing operations.');
+      assert.match(text, /\bsequenza\b/, 'The second header line must repeat on every page containing operations.');
       assert.match(compact(text), /Risultato fiscale/);
     }
   });
