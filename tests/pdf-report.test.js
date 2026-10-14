@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { calculate } from '../dist/engine.js';
-import { buildPdfReport } from '../dist/pdf-report.js';
+import { buildPdfReport, buildPdfReportData } from '../dist/pdf-report.js';
 
 const dataset = overrides => ({ version: 1, openingDate: '2025-01-01', initialLots: [], transactions: [], carryLosses: [], ...overrides });
 const buy = (id, overrides) => ({ id, date: '2025-02-01', order: 1, type: 'acquisto', asset: 'BTC', quantity: '1', unitPrice: '100', fees: '0', ...overrides });
@@ -179,11 +179,70 @@ test('Unicode names survive and every untrusted text field is HTML-escaped', () 
   assert.match(buildPdfReport(result, input.openingDate), /<td>Ξ BTC<\/td>/);
   result.rows[0].asset = '<svg onload="bad()">&\'';
   result.warnings.push('<img src="x" onerror="bad()"> & \'errore\'');
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.equal(data.rows[0][1], result.rows[0].asset);
+  assert.equal(data.warnings.at(-1), result.warnings.at(-1));
   const html = buildPdfReport(result, '<script>alert(1)</script>');
   assert.match(html, /&lt;svg onload=&quot;bad\(\)&quot;&gt;&amp;&#39;/);
   assert.match(html, /&lt;img src=&quot;x&quot; onerror=&quot;bad\(\)&quot;&gt; &amp; &#39;errore&#39;/);
   assert.match(html, /&lt;script&gt;alert\(1\)&lt;\/script&gt;/);
   assert.doesNotMatch(html, /<svg|<img|<script/);
+});
+
+test('the plain report model and HTML share exact formatted values without a DOM', () => {
+  const input = dataset({
+    initialLots: [lot('tiny', { quantity: '0.000000000000000001', unitCost: '1' })],
+    transactions: [
+      sell('tiny-gain', { quantity: '0.000000000000000001', unitPrice: '1.000000000000000001' }),
+      buy('unicode', { asset: '石油', order: 2, unitPrice: '123456789012345678901234567890.12', fees: '0.005' })
+    ]
+  });
+  const result = calculate(input, 2025);
+  const data = buildPdfReportData(result, input.openingDate);
+  const html = buildPdfReport(result, input.openingDate);
+  assert.deepEqual(Object.keys(data), [
+    'title', 'header', 'summaryTitle', 'scope', 'summary', 'warnings', 'columns',
+    'rows', 'notes', 'lossSections', 'recoveryNote', 'disclaimer', 'emptyNote'
+  ]);
+  assert.equal(data.columns.length, 8);
+  assert.deepEqual(data.rows[0], [
+    '01/02/2025\nSequenza 1', 'BTC', 'Vendita', '0,000000000000000001', '0,00 €',
+    '0,00 €', '0,00 €', 'Plusvalenza inferiore a 0,005 €'
+  ]);
+  assert.equal(data.rows[1][1], '石油');
+  assert.equal(data.rows[1][6], '123.456.789.012.345.678.901.234.567.890,13 €');
+  for (const row of data.rows) {
+    assert.equal(row.length, data.columns.length);
+    for (const value of row.slice(1)) assert.ok(html.includes(value), value);
+  }
+  for (const { label, value } of data.summary) {
+    assert.ok(html.includes(`<dt>${label}</dt><dd>${value}</dd>`), label);
+  }
+  const onlyStringLeaves = value => {
+    if (value && typeof value === 'object') Object.values(value).forEach(onlyStringLeaves);
+    else assert.equal(typeof value, 'string');
+  };
+  onlyStringLeaves(data);
+  assert.deepEqual(JSON.parse(JSON.stringify(data)), data);
+});
+
+test('plain report arrays are detached from calculation data and include loss notes', () => {
+  const input = dataset({
+    carryLosses: [{ id: 'carry', year: 2024, amount: '7.5' }]
+  });
+  const result = calculate(input, 2026);
+  const snapshot = structuredClone(result);
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.deepEqual(data.lossSections, [{
+    title: 'Minusvalenze residue al termine del 2026',
+    items: ['7,50 € · origine 2024 · scadenza 2028']
+  }]);
+  assert.equal(data.summaryTitle, 'Riepilogo fiscale · anno 2026');
+  assert.match(data.header[2], /Nessuna operazione inserita\. Operazioni: 0\./);
+  data.warnings.push('Avvertenza aggiunta solo alla copia');
+  data.rows.push(['modifica locale']);
+  data.lossSections[0].items[0] = 'modifica locale';
+  assert.deepEqual(result, snapshot);
 });
 
 test('remaining losses, expiry and actual calculation warnings are included', () => {

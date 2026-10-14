@@ -3,8 +3,8 @@ import { calculate } from './engine.js';
 import { exportCsv, exportReportCsv, parseImport } from './csv.js';
 import { bindTransactionOrder } from './transaction-order.js';
 import { createImportSession } from './import-session.js';
-import { buildPdfReport } from './pdf-report.js';
-import { printPdfReport } from './pdf-print.js';
+import { buildPdfReportData } from './pdf-report.js';
+import { createPdfDownload } from './pdf-download.js';
 
 const $ = id => document.getElementById(id);
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
@@ -21,6 +21,16 @@ const importSession = createImportSession((content, name) => {
 let confirmationAction = null;
 let toastTimer;
 let result = calculate(dataset, selectedYear);
+const pdfDownload = createPdfDownload({
+  button: $('pdf-button'), link: $('pdf-download-link'),
+  status: $('pdf-download-status'), container: $('pdf-download-notice'),
+  URL, Blob,
+  build: async report => {
+    const { buildPdfDocument } = await import('./pdf-document.js');
+    return buildPdfDocument(report, { document });
+  }
+});
+window.addEventListener('pagehide', () => pdfDownload.reset());
 
 const labels = {
   transactions: { title: 'Le tue operazioni', breadcrumb: 'Operazioni', eyebrow: 'IL DIARIO DEL PORTAFOGLIO', button: 'Nuova operazione', emptyTitle: 'Ogni conto parte da un movimento.', emptyText: 'Inserisci i lotti iniziali, oppure aggiungi il tuo primo acquisto. Il resto lo calcoliamo insieme.', emptyButton: 'Inserisci la situazione iniziale', footnote: 'Operazioni di tutti gli anni, ordinate per data e sequenza.' },
@@ -68,6 +78,7 @@ function confirm(title, description, action, button = 'Conferma') {
 function commit(next, message) {
   const nextYear = Math.max(selectedYear, Number(next.openingDate.slice(0, 4)));
   const computed = calculate(next, nextYear);
+  pdfDownload.reset();
   dataset = next;
   selectedYear = nextYear;
   result = computed;
@@ -255,11 +266,10 @@ function exportSession() {
   try { download(exportCsv(dataset), 'criptoconti-sessione-' + new Date().toISOString().slice(0, 10) + '.csv'); notify('CSV ricaricabile esportato sul tuo dispositivo.'); }
   catch (error) { notify(errorText(error), true); }
 }
-function exportPdf() {
+async function exportPdf() {
   try {
-    const report = buildPdfReport(result, dataset.openingDate);
-    notify('Nella finestra di stampa scegli “Salva come PDF” per conservare il riepilogo.');
-    printPdfReport(report, 'CriptoConti-riepilogo-operazioni', { document, window });
+    const report = buildPdfReportData(result, dataset.openingDate);
+    await pdfDownload.export(report, 'criptoconti-operazioni-anno-' + selectedYear + '.pdf');
   } catch (error) { notify(errorText(error), true); }
 }
 function exampleDataset() {
@@ -301,7 +311,7 @@ async function readFile(file) {
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { view = button.dataset.view; $('asset-filter').value = ''; renderLedger(); }));
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
 ['open-rules', 'scope-rules'].forEach(name => $(name).addEventListener('click', () => showDialog('rules-dialog')));
-$('tax-year').addEventListener('change', () => { selectedYear = Number($('tax-year').value); result = calculate(dataset, selectedYear); render(); });
+$('tax-year').addEventListener('change', () => { pdfDownload.reset(); selectedYear = Number($('tax-year').value); result = calculate(dataset, selectedYear); render(); });
 $('asset-filter').addEventListener('input', renderLedger);
 $('add-button').addEventListener('click', () => openEntry(view === 'lots' ? 'initialLots' : view === 'losses' ? 'carryLosses' : 'transactions'));
 $('entry-form').addEventListener('submit', saveEntry);

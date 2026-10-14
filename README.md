@@ -33,7 +33,7 @@ npm run check
 
 I test verificano aritmetica, motore di calcolo, formato CSV, importazione asincrona, sequenza delle operazioni e riepilogo PDF; il controllo aggiuntivo verifica i file del progetto. Il workflow **Controlli** esegue entrambi i comandi con Node.js 24 sui push e sulle pull request.
 
-Il job **PDF in Chrome** genera PDF con dati sintetici usando il sito nel browser e ne controlla testo, dimensioni delle pagine, impaginazione su più pagine e ripristino della sessione. I PDF e le anteprime sono disponibili come artefatto della verifica per sette giorni. Questi test usano Playwright 1.58.2, Chrome, Poppler e i font Noto CJK, installati soltanto nell'ambiente di test; il sito non richiede queste dipendenze. Con tali strumenti disponibili, la verifica si avvia con `npm run test:pdf-browser`.
+Il job **PDF in Chrome** scarica i PDF reali prodotti dal sito con dati sintetici, anche con emulazione di un telefono Android e stampa disattivata. Controlla testo, dimensioni delle pagine, impaginazione, collegamento per ripetere il download e conservazione della sessione. I PDF e le anteprime sono disponibili come artefatto della verifica per sette giorni. Questi test usano Playwright 1.58.2, Chrome, Poppler e i font Noto CJK, installati soltanto nell'ambiente di test. Con tali strumenti disponibili, la verifica si avvia con `npm run test:pdf-browser`. L'emulazione non sostituisce una prova sul gestore download di un telefono fisico.
 
 ## Modifiche al progetto
 
@@ -43,11 +43,15 @@ Usare un branch dedicato per ogni modifica e aprire una pull request verso `main
 
 L'esportazione dei dati salva la configurazione, i lotti iniziali, le transazioni e le minusvalenze pregresse. Importando quel file si ricostruiscono i risultati con le regole dell'applicazione. Il CSV del prospetto è invece destinato alla consultazione e non è un file ricaricabile.
 
-Nella sezione **Operazioni**, il pulsante **Esporta PDF** apre la finestra di stampa del browser: selezionare **Salva come PDF** come destinazione. Il prospetto è predisposto in A4 orizzontale e contiene tutte le operazioni della sessione, anche con un filtro di ricerca attivo. Per ciascuna riga mostra quantità, commissioni, ricavo netto, costo di acquisto o costo fiscale LIFO e plusvalenza/minusvalenza; gli acquisti sono indicati come **Nessun realizzo**. Il riepilogo fiscale riguarda soltanto l'anno selezionato e conserva le avvertenze del calcolo.
+Nella sezione **Operazioni**, il pulsante **Esporta PDF** crea e scarica direttamente un file PDF, senza aprire la stampa del browser. Su Android con Chrome il file viene gestito come un normale download. Se il download automatico non parte, toccare il collegamento **Scarica il PDF** che compare sotto il pulsante. Alcuni browser possono aprire un'anteprima in una nuova scheda, dalla quale salvare o condividere il file: la pagina della sessione rimane aperta.
 
-Gli importi del PDF sono arrotondati direttamente dai valori esatti del calcolo. Una plusvalenza o minusvalenza non nulla che si arrotonda a zero è indicata come **inferiore a 0,005 €**, senza confonderla con un pareggio. Le avvertenze relative al calcolo sono riportate prima della tabella, accanto al riepilogo fiscale. Le pagine sono numerate nei browser che supportano i contatori di pagina in stampa.
+Il prospetto è in A4 orizzontale e contiene tutte le operazioni della sessione, anche con un filtro di ricerca attivo. Per ciascuna riga mostra quantità, commissioni, ricavo netto, costo di acquisto o costo fiscale LIFO e plusvalenza/minusvalenza; gli acquisti sono indicati come **Nessun realizzo**. Il riepilogo fiscale riguarda soltanto l'anno selezionato e conserva le avvertenze del calcolo.
 
-Il PDF è creato tramite la stampa locale del browser e serve alla consultazione. Per riprendere il lavoro usare il CSV ottenuto con **Esporta dati**. Chiudere o annullare la finestra di stampa lascia intatti i dati della sessione.
+Gli importi del PDF sono arrotondati direttamente dai valori esatti del calcolo. Una plusvalenza o minusvalenza non nulla che si arrotonda a zero è indicata come **inferiore a 0,005 €**, senza confonderla con un pareggio. Le avvertenze relative al calcolo sono riportate prima della tabella, accanto al riepilogo fiscale. Le intestazioni si ripetono sulle pagine della tabella e ogni pagina indica il proprio numero e il totale.
+
+Il PDF è creato nella memoria del browser con una copia locale di **pdf-lib 1.17.1**, caricata solo alla prima esportazione. Non vengono usati CDN o servizi di conversione e nessuna transazione viene inviata in rete. Versione, licenza MIT e checksum sono documentati in [dist/vendor/README.md](dist/vendor/README.md). Il testo e gli importi sono vettoriali; i nomi Unicode non supportati dal font PDF sono disegnati con i font del dispositivo e accompagnati dal testo originale tramite `/ActualText`.
+
+Il collegamento conserva in memoria il PDF appena generato per consentire un secondo download. Cambiare anno, modificare/importare i dati o svuotare la sessione rimuove il collegamento al vecchio report. Il PDF serve alla consultazione: per riprendere il lavoro usare il CSV ottenuto con **Esporta dati**.
 
 Il formato usa UTF-8, separatore `;`, date `AAAA-MM-GG` e punto decimale senza separatori delle migliaia. La specifica è in [docs/CSV.md](docs/CSV.md); [examples/esempio.csv](examples/esempio.csv) contiene un portafoglio minimo da importare.
 
