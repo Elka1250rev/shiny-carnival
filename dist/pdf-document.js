@@ -1,4 +1,8 @@
-import { PDFDocument, PDFHexString, PDFName, PDFOperator, StandardFonts, rgb } from './vendor/pdf-lib.esm.min.js';
+import {
+  PDFDocument, PDFHexString, PDFName, PDFOperator, StandardFonts, rgb,
+  beginText as beginPdfText, endText as endPdfText, setFillingColor,
+  setFontAndSize, setTextMatrix, showText, setTextRenderingMode, TextRenderingMode
+} from './vendor/pdf-lib.esm.min.js';
 
 const PAGE = [841.89, 595.28];
 const MARGIN = 34;
@@ -73,10 +77,23 @@ export async function buildPdfDocument(report, { document } = {}) {
   ]));
   const endText = () => page.pushOperators(PDFOperator.of('EMC'));
 
+  // Keep the text state until EMC. Restoring the graphics state before closing
+  // ActualText makes some PDF readers report zero-height selection bounds.
+  const drawVectorText = (text, x, y, size, isBold, color, invisible = false) => {
+    page.pushOperators(
+      beginPdfText(), setFillingColor(color),
+      setFontAndSize(PDFName.of(isBold ? 'ReportBold' : 'ReportRegular'), size),
+      setTextMatrix(1, 0, 0, 1, x, y),
+      setTextRenderingMode(invisible ? TextRenderingMode.Invisible : TextRenderingMode.Fill),
+      showText(fontFor(isBold).encodeText(text)),
+      setTextRenderingMode(TextRenderingMode.Fill), endPdfText()
+    );
+  };
+
   const drawLine = async (text, x, baseline, size, isBold = false, color = INK) => {
     if (!text) return;
     if (supports(text)) {
-      page.drawText(text, { x, y: baseline, font: fontFor(isBold), size, color });
+      drawVectorText(text, x, baseline, size, isBold, color);
       return;
     }
     // Only unsupported labels are images. /ActualText preserves their original Unicode text.
@@ -110,6 +127,11 @@ export async function buildPdfDocument(report, { document } = {}) {
       rendered = { image: await pdf.embedPng(bytes), width: canvas.width / scale, height: canvas.height / scale, left: left + padding, descent: descent + padding };
       images.set(key, rendered);
     }
+    // ActualText around an image alone is ignored by several readers. Invisible
+    // glyphs anchor the original Unicode text without changing its appearance.
+    const anchor = 'M'.repeat(Array.from(text).length);
+    const anchorSize = measure(text, size, isBold) / fontFor(isBold).widthOfTextAtSize(anchor, 1);
+    drawVectorText(anchor, x, baseline, anchorSize, isBold, color, true);
     page.drawImage(rendered.image, {
       x: x - rendered.left, y: baseline - rendered.descent,
       width: rendered.width, height: rendered.height
@@ -118,6 +140,8 @@ export async function buildPdfDocument(report, { document } = {}) {
 
   const newPage = () => {
     page = pdf.addPage(PAGE);
+    page.node.setFontDictionary(PDFName.of('ReportRegular'), regular.ref);
+    page.node.setFontDictionary(PDFName.of('ReportBold'), bold.ref);
     page.drawText('CriptoConti', { x: MARGIN, y: PAGE[1] - 27, size: 8, font: bold, color: GREEN });
     page.drawLine({ start: { x: MARGIN, y: PAGE[1] - 33 }, end: { x: PAGE[0] - MARGIN, y: PAGE[1] - 33 }, thickness: 0.5, color: LINE });
     cursor = PAGE[1] - 49;
