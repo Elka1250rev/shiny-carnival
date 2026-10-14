@@ -33,6 +33,8 @@ npm run check
 
 I test verificano aritmetica, motore di calcolo, formato CSV, importazione asincrona, sequenza delle operazioni e riepilogo PDF; il controllo aggiuntivo verifica i file del progetto. Il workflow **Controlli** esegue entrambi i comandi con Node.js 24 sui push e sulle pull request.
 
+Il job **PDF in Chrome** genera PDF con dati sintetici usando il sito nel browser e ne controlla testo, dimensioni delle pagine, impaginazione su più pagine e ripristino della sessione. I PDF e le anteprime sono disponibili come artefatto della verifica per sette giorni. Questi test usano Playwright 1.58.2, Chrome, Poppler e i font Noto CJK, installati soltanto nell'ambiente di test; il sito non richiede queste dipendenze. Con tali strumenti disponibili, la verifica si avvia con `npm run test:pdf-browser`.
+
 ## Modifiche al progetto
 
 Usare un branch dedicato per ogni modifica e aprire una pull request verso `main`. Non pubblicare modifiche direttamente su `main`. Verificare i test e i controlli prima di proporre l'unione della pull request; l'unione in `main` avvia la pubblicazione del sito.
@@ -42,6 +44,8 @@ Usare un branch dedicato per ogni modifica e aprire una pull request verso `main
 L'esportazione dei dati salva la configurazione, i lotti iniziali, le transazioni e le minusvalenze pregresse. Importando quel file si ricostruiscono i risultati con le regole dell'applicazione. Il CSV del prospetto è invece destinato alla consultazione e non è un file ricaricabile.
 
 Nella sezione **Operazioni**, il pulsante **Esporta PDF** apre la finestra di stampa del browser: selezionare **Salva come PDF** come destinazione. Il prospetto è predisposto in A4 orizzontale e contiene tutte le operazioni della sessione, anche con un filtro di ricerca attivo. Per ciascuna riga mostra quantità, commissioni, ricavo netto, costo di acquisto o costo fiscale LIFO e plusvalenza/minusvalenza; gli acquisti sono indicati come **Nessun realizzo**. Il riepilogo fiscale riguarda soltanto l'anno selezionato e conserva le avvertenze del calcolo.
+
+Gli importi del PDF sono arrotondati direttamente dai valori esatti del calcolo. Una plusvalenza o minusvalenza non nulla che si arrotonda a zero è indicata come **inferiore a 0,005 €**, senza confonderla con un pareggio. Le avvertenze relative al calcolo sono riportate prima della tabella, accanto al riepilogo fiscale. Le pagine sono numerate nei browser che supportano i contatori di pagina in stampa.
 
 Il PDF è creato tramite la stampa locale del browser e serve alla consultazione. Per riprendere il lavoro usare il CSV ottenuto con **Esporta dati**. Chiudere o annullare la finestra di stampa lascia intatti i dati della sessione.
 

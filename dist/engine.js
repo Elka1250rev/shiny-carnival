@@ -16,7 +16,8 @@ const isOrder = value => Number.isSafeInteger(value) && value >= 0;
 const chronological = (left, right) => left.date.localeCompare(right.date) || left.order - right.order;
 const average = (cost, quantity) => quantity.cmp(ZERO) === 0 ? ZERO : cost.div(quantity);
 const sum = values => values.reduce((result, value) => result.add(value), ZERO);
-const formatLoss = loss => ({ originYear: loss.originYear, expiresYear: loss.originYear + 4, amount: loss.amount.toString() });
+const formatLoss = loss => ({ originYear: loss.originYear, expiresYear: loss.originYear + 4,
+  amount: loss.amount.toString(), displayAmount: loss.amount.toFixed(2) });
 
 export class ValidationError extends Error {
   constructor(errors) {
@@ -173,6 +174,10 @@ function calculateTax(data, calculatedRows, selectedYear) {
       year, rate, gains: gains.toString(), losses: losses.toString(), net: net.toString(),
       currentLoss: currentLoss.toString(), lossesUsed: lossesUsed.toString(), taxable: taxable.toString(),
       tax: taxable.mul(String(rate)).div('100').toFixed(2),
+      // Format from the exact values: formatting the serialized 18-place values
+      // again can cross a half-cent boundary and introduce a second rounding.
+      display: { gains: gains.toFixed(2), losses: losses.toFixed(2), net: net.toFixed(2),
+        lossesUsed: lossesUsed.toFixed(2), taxable: taxable.toFixed(2) },
       remainingLosses: available.map(formatLoss), expiredLosses: expired.map(formatLoss),
     };
   }
@@ -255,6 +260,8 @@ export function calculate(data, selectedYear = typeof data?.openingDate === 'str
       fiscalBeforeAverage: fiscalBeforeAverage.toString(), fiscalAfterAverage: average(holding.fiscalCost, holding.quantity).toString(),
       proceeds: proceeds?.toString() ?? null, costBasis: costBasis.toString(),
       fiscalResult: fiscalResult?.toString() ?? null, managementResult: managementResult?.toString() ?? null,
+      display: { proceeds: proceeds?.toFixed(2) ?? null, costBasis: costBasis.toFixed(2),
+        fiscalResult: fiscalResult?.toFixed(2) ?? null, fiscalSign: fiscalResult?.cmp(ZERO) ?? null },
       lotDetails, exactFiscalResult: fiscalResult,
     });
   }

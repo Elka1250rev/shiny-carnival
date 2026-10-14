@@ -9,7 +9,15 @@
 }
 
 @media print {
-  @page { size: A4 landscape; margin: 12mm; }
+  @page crypto-report {
+    size: A4 landscape;
+    margin: 12mm;
+    @bottom-right {
+      content: "Pagina " counter(page);
+      font: 8pt Arial, sans-serif;
+      color: #44543e;
+    }
+  }
   body.pdf-export {
     margin: 0;
     padding: 0;
@@ -19,12 +27,15 @@
   body.pdf-export > :not(#pdf-report) { display: none !important; }
   body.pdf-export > #pdf-report {
     display: block !important;
+    page: crypto-report;
     font: 9pt/1.45 Arial, sans-serif;
     overflow-wrap: anywhere;
   }
   .pdf-report * { box-sizing: border-box; }
   .pdf-report h1 { font-size: 20pt; margin: 0 0 4mm; letter-spacing: -.3pt; }
   .pdf-report h2 { font-size: 13pt; margin: 6mm 0 3mm; }
+  .pdf-report h2, .pdf-report h3 { break-after: avoid; page-break-after: avoid; }
+  .pdf-report p { orphans: 3; widows: 3; }
   .pdf-header { break-inside: avoid; page-break-inside: avoid; }
   .pdf-header p { margin: 2mm 0; }
   .pdf-summary {
@@ -74,4 +85,5 @@
   .pdf-note, .pdf-disclaimer, .pdf-empty, .pdf-warnings { font-size: 8pt; line-height: 1.6; }
   .pdf-warnings { padding-left: 5mm; }
   .pdf-disclaimer { border-top: 1px solid #cbd3c9; padding-top: 3mm; margin-top: 5mm; }
+  .pdf-report .pdf-disclaimer h2 { font-size: 9pt; margin: 0 0 2mm; }
 }

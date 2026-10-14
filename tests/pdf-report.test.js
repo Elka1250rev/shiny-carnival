@@ -88,10 +88,89 @@ test('sub-cent results keep their exact gain or loss classification and totals',
     ]
   }));
   const [gain, loss] = operationRows(html);
-  assert.match(gain, /Plusvalenza \+0,00 €/);
-  assert.match(loss, /Minusvalenza −0,00 €/);
+  assert.match(gain, /Plusvalenza inferiore a 0,005 €/);
+  assert.match(loss, /Minusvalenza inferiore a 0,005 €/);
   assert.doesNotMatch(gain + loss, /Pareggio/);
   assert.match(html, /totali fiscali sono calcolati con la precisione del motore/);
+});
+
+test('gains and losses smaller than eighteen decimal places retain their exact classification', () => {
+  const html = report(dataset({
+    initialLots: [
+      lot('btc', { quantity: '0.000000000000000001', unitCost: '1' }),
+      lot('eth', { asset: 'ETH', quantity: '0.000000000000000001', unitCost: '1' })
+    ],
+    transactions: [
+      sell('tiny-gain', { quantity: '0.000000000000000001', unitPrice: '1.000000000000000001' }),
+      sell('tiny-loss', { asset: 'ETH', order: 2, quantity: '0.000000000000000001', unitPrice: '0.999999999999999999' })
+    ]
+  }));
+  const [gain, loss] = operationRows(html);
+  assert.match(gain, /Plusvalenza inferiore a 0,005 €/);
+  assert.match(loss, /Minusvalenza inferiore a 0,005 €/);
+  assert.doesNotMatch(gain + loss, /Pareggio|[+−]0,00/);
+});
+
+test('fractional LIFO amounts round once and distinguish results below and at half a cent', () => {
+  const html = report(dataset({ transactions: [
+    buy('fractional', { quantity: '3', unitPrice: '100', fees: '0.014999999999999999' }),
+    sell('below-half', { order: 2, unitPrice: '100' }),
+    buy('exact', { order: 3, asset: 'ETH', unitPrice: '100' }),
+    sell('half-gain', { order: 4, asset: 'ETH', quantity: '0.5', unitPrice: '100.01' }),
+    sell('half-loss', { order: 5, asset: 'ETH', quantity: '0.5', unitPrice: '99.99' })
+  ] }));
+  const rows = operationRows(html);
+  assert.match(rows[1], /100,00 €<\/td><td class="numeric">100,00 €<\/td><td class="numeric">Minusvalenza inferiore a 0,005 €/);
+  assert.match(rows[3], /Plusvalenza \+0,01 €/);
+  assert.match(rows[4], /Minusvalenza −0,01 €/);
+});
+
+test('purchase costs, sale proceeds and annual totals round exact products directly to cents', () => {
+  const html = report(dataset({
+    initialLots: [lot('btc', { unitCost: '0' })],
+    transactions: [
+      buy('purchase', { asset: 'ETH', quantity: '0.3', unitPrice: '0.016666666666666666' }),
+      sell('sale', { order: 2, quantity: '0.3', unitPrice: '0.016666666666666666' })
+    ]
+  }));
+  const [purchase, sale] = operationRows(html);
+  assert.match(purchase, /—<\/td><td class="numeric">0,00 €<\/td><td class="numeric">Nessun realizzo/);
+  assert.match(sale, /0,00 €<\/td><td class="numeric">0,00 €<\/td><td class="numeric">Plusvalenza inferiore a 0,005 €/);
+  for (const label of ['Plusvalenze', 'Risultato netto', 'Imponibile']) {
+    assert.ok(html.includes(`<dt>${label}</dt><dd>0,00 €</dd>`), label);
+  }
+});
+
+test('remaining and expired loss amounts avoid a second rounding after exact compensation', () => {
+  const input = dataset({
+    carryLosses: [{ id: 'carry', year: 2021, amount: '0.01' }],
+    transactions: [
+      buy('purchase', { quantity: '3', unitPrice: '100', fees: '0.014999999999999999' }),
+      sell('sale', { order: 2, unitPrice: '100.01' })
+    ]
+  });
+  const current = report(input, 2025);
+  assert.match(current, /<dt>Minusvalenze pregresse utilizzate<\/dt><dd>0,01 €<\/dd>/);
+  assert.match(current, /0,00 € · origine 2021 · scadenza 2025/);
+  const nextYear = report(input, 2026);
+  assert.match(nextYear, /Minusvalenze scadute, escluse dalla compensazione/);
+  assert.match(nextYear, /0,00 € · origine 2021 · scadenza 2025/);
+});
+
+test('the report can still render calculation snapshots without display metadata', () => {
+  const input = dataset({
+    initialLots: [lot('initial')],
+    transactions: [sell('sale', { unitPrice: '120' })],
+    carryLosses: [{ id: 'carry', year: 2024, amount: '50' }]
+  });
+  const result = calculate(input, 2025);
+  result.rows.forEach(row => { delete row.display; });
+  delete result.tax.display;
+  [...result.tax.remainingLosses, ...result.tax.expiredLosses].forEach(loss => { delete loss.displayAmount; });
+  const html = buildPdfReport(result, input.openingDate);
+  assert.match(html, /Plusvalenza \+20,00 €/);
+  assert.match(html, /<dt>Plusvalenze<\/dt><dd>20,00 €<\/dd>/);
+  assert.match(html, /30,00 € · origine 2024 · scadenza 2028/);
 });
 
 test('Unicode names survive and every untrusted text field is HTML-escaped', () => {
@@ -120,6 +199,9 @@ test('remaining losses, expiry and actual calculation warnings are included', ()
   assert.match(html, /9,50 € · origine 2021 · scadenza 2025/);
   assert.match(html, /Il riepilogo annuale comprende solo le operazioni dalla data di apertura/);
   assert.match(html, /Le minusvalenze pregresse scadute sono escluse dalla compensazione/);
+  assert.ok(html.indexOf('Avvertenze del calcolo') < html.indexOf('<table class="pdf-operations">'));
+  assert.match(html, /persone fisiche residenti in Italia, fuori dall’attività d’impresa, in regime dichiarativo/);
+  assert.match(html, /compravendite di cripto-attività ordinarie contro euro/);
 });
 
 test('an empty session produces a zero summary and explains the CSV needed to resume', () => {

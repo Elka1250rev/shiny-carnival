@@ -93,7 +93,7 @@ test('sale cash fees may exceed proceeds and create a deductible loss', () => {
   assert.equal(result.tax.losses, '1');
   assert.equal(result.tax.currentLoss, '1');
   assert.equal(result.tax.tax, '0.00');
-  assert.deepEqual(result.tax.remainingLosses, [{ originYear: 2025, expiresYear: 2029, amount: '1' }]);
+  assert.deepEqual(result.tax.remainingLosses, [{ originYear: 2025, expiresYear: 2029, amount: '1', displayAmount: '1.00' }]);
 });
 
 test('annual tax consumes oldest eligible losses and carries the residual across years', () => {
@@ -107,7 +107,7 @@ test('annual tax consumes oldest eligible losses and carries the residual across
   assert.equal(year2025.tax.gains, '100');
   assert.equal(year2025.tax.lossesUsed, '100');
   assert.equal(year2025.tax.tax, '0.00');
-  assert.deepEqual(year2025.tax.remainingLosses, [{ originYear: 2024, expiresYear: 2028, amount: '110' }]);
+  assert.deepEqual(year2025.tax.remainingLosses, [{ originYear: 2024, expiresYear: 2028, amount: '110', displayAmount: '110.00' }]);
   const year2026 = calculate(input, 2026);
   assert.equal(year2026.tax.rate, 33);
   assert.equal(year2026.tax.gains, '150');
@@ -123,7 +123,7 @@ test('a loss incurred in 2025 offsets a gain in 2026', () => {
     buy('purchase-2025', { unitPrice: '100' }), sell('sale-2025', { order: 2, unitPrice: '0' }),
     buy('purchase-2026', { date: '2026-02-01', unitPrice: '0' }), sell('sale-2026', { date: '2026-02-01', order: 2, unitPrice: '150' }),
   ] });
-  assert.deepEqual(calculate(input, 2025).tax.remainingLosses, [{ originYear: 2025, expiresYear: 2029, amount: '100' }]);
+  assert.deepEqual(calculate(input, 2025).tax.remainingLosses, [{ originYear: 2025, expiresYear: 2029, amount: '100', displayAmount: '100.00' }]);
   const tax = calculate(input, 2026).tax;
   assert.equal(tax.lossesUsed, '100');
   assert.equal(tax.taxable, '50');
@@ -141,7 +141,7 @@ test('expired carry losses are reported and four-year eligibility includes the e
   assert.equal(result.tax.lossesUsed, '10');
   assert.equal(result.tax.taxable, '90');
   assert.equal(result.tax.tax, '29.70');
-  assert.deepEqual(result.tax.expiredLosses, [{ originYear: 2021, expiresYear: 2025, amount: '25' }]);
+  assert.deepEqual(result.tax.expiredLosses, [{ originYear: 2021, expiresYear: 2025, amount: '25', displayAmount: '25.00' }]);
   assert.equal(result.warnings.length, 1);
   assert.throws(() => calculate(input, 2025), ValidationError);
 });
@@ -157,7 +157,7 @@ test('same-year losses reduce gains before the use of previously declared losses
   assert.equal(tax.losses, '50');
   assert.equal(tax.net, '50');
   assert.equal(tax.lossesUsed, '50');
-  assert.deepEqual(tax.remainingLosses, [{ originYear: 2024, expiresYear: 2028, amount: '25' }]);
+  assert.deepEqual(tax.remainingLosses, [{ originYear: 2024, expiresYear: 2028, amount: '25', displayAmount: '25.00' }]);
 });
 
 test('carry loss residuals below historical thresholds remain valid', () => {
@@ -231,7 +231,7 @@ test('an incomplete-year snapshot warns and calculations do not mutate the datas
   const result = calculate(input, 2025);
   assert.ok(result.warnings[0].includes('data di apertura'));
   assert.equal(JSON.stringify(input), original);
-  assert.deepEqual(calculate(dataset(), 2025).tax, { year: 2025, rate: 26, gains: '0', losses: '0', net: '0', currentLoss: '0', lossesUsed: '0', taxable: '0', tax: '0.00', remainingLosses: [], expiredLosses: [] });
+  assert.deepEqual(calculate(dataset(), 2025).tax, { year: 2025, rate: 26, gains: '0', losses: '0', net: '0', currentLoss: '0', lossesUsed: '0', taxable: '0', tax: '0.00', display: { gains: '0.00', losses: '0.00', net: '0.00', lossesUsed: '0.00', taxable: '0.00' }, remainingLosses: [], expiredLosses: [] });
 });
 
 test('opening lots precede purchases on the opening day regardless of their separate sequence', () => {
@@ -322,8 +322,8 @@ test('same-category crypto gains and losses offset across different assets', () 
   assert.equal(result.tax.lossesUsed, '0');
   assert.equal(result.tax.tax, '0.00');
   assert.deepEqual(result.tax.remainingLosses, [
-    { originYear: 2024, expiresYear: 2028, amount: '50' },
-    { originYear: 2025, expiresYear: 2029, amount: '100' },
+    { originYear: 2024, expiresYear: 2028, amount: '50', displayAmount: '50.00' },
+    { originYear: 2025, expiresYear: 2029, amount: '100', displayAmount: '100.00' },
   ]);
 });
 
@@ -352,4 +352,52 @@ test('retained fiscal cost conserves purchase costs through partial sales and ex
   assert.equal(liquidated.rows.at(-1).costBasis, '50.5');
   assert.equal(liquidated.holdings.find(value => value.asset === 'BTC').fiscalCost, '0');
   assert.equal(liquidated.holdings.find(value => value.asset === 'ETH').fiscalCost, '11');
+});
+
+test('display metadata preserves signs below serialized precision and remains JSON-safe', () => {
+  const result = calculate(dataset({
+    initialLots: [
+      lot('btc', { quantity: '0.000000000000000001', unitCost: '1' }),
+      lot('eth', { asset: 'ETH', quantity: '0.000000000000000001', unitCost: '1' }),
+    ],
+    transactions: [
+      sell('gain', { quantity: '0.000000000000000001', unitPrice: '1.000000000000000001' }),
+      sell('loss', { order: 2, asset: 'ETH', quantity: '0.000000000000000001', unitPrice: '0.999999999999999999' }),
+      buy('purchase', { order: 3, asset: 'SOL', unitPrice: '1' }),
+    ],
+  }), 2025);
+  assert.equal(result.rows[0].fiscalResult, '0');
+  assert.equal(result.rows[1].fiscalResult, '0');
+  assert.deepEqual(result.rows[0].display, { proceeds: '0.00', costBasis: '0.00', fiscalResult: '0.00', fiscalSign: 1 });
+  assert.deepEqual(result.rows[1].display, { proceeds: '0.00', costBasis: '0.00', fiscalResult: '0.00', fiscalSign: -1 });
+  assert.deepEqual(result.rows[2].display, { proceeds: null, costBasis: '1.00', fiscalResult: null, fiscalSign: null });
+  assert.deepEqual(JSON.parse(JSON.stringify(result)), result);
+});
+
+test('display metadata rounds fractional LIFO and tax amounts directly from exact values', () => {
+  const result = calculate(dataset({ transactions: [
+    buy('purchase', { quantity: '3', unitPrice: '100', fees: '0.014999999999999999' }),
+    sell('sale', { order: 2, unitPrice: '100' }),
+  ] }), 2025);
+  // The unit cost is 100 + 0.014999999999999999 / 3: just below 100.005.
+  assert.equal(result.rows[1].costBasis, '100.005');
+  assert.equal(result.rows[1].fiscalResult, '-0.005');
+  assert.deepEqual(result.rows[1].display, { proceeds: '100.00', costBasis: '100.00', fiscalResult: '0.00', fiscalSign: -1 });
+  assert.deepEqual(result.tax.display, { gains: '0.00', losses: '0.00', net: '0.00', lossesUsed: '0.00', taxable: '0.00' });
+  assert.deepEqual(result.tax.remainingLosses, [{ originYear: 2025, expiresYear: 2029, amount: '0.005', displayAmount: '0.00' }]);
+});
+
+test('carry-loss display rounds the exact residue both before and after expiry', () => {
+  const input = dataset({
+    carryLosses: [{ id: 'carry', year: 2021, amount: '0.01' }],
+    transactions: [
+      buy('purchase', { quantity: '3', unitPrice: '100', fees: '0.014999999999999999' }),
+      sell('sale', { order: 2, unitPrice: '100.01' }),
+    ],
+  });
+  const current = calculate(input, 2025);
+  assert.deepEqual(current.tax.display, { gains: '0.01', losses: '0.00', net: '0.01', lossesUsed: '0.01', taxable: '0.00' });
+  const remaining = [{ originYear: 2021, expiresYear: 2025, amount: '0.005', displayAmount: '0.00' }];
+  assert.deepEqual(current.tax.remainingLosses, remaining);
+  assert.deepEqual(calculate(input, 2026).tax.expiredLosses, remaining);
 });
