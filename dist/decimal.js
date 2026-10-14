@@ -34,26 +34,51 @@ export class Decimal {
     return new Decimal(numerator, denominator);
   }
 
+  // Internal arithmetic cancels common factors before multiplying. The result
+  // is already reduced, so avoid another GCD on potentially enormous products.
+  static #reduced(numerator, denominator) {
+    const result = Object.create(Decimal.prototype);
+    const sign = denominator < 0n ? -1n : 1n;
+    result.numerator = numerator * sign;
+    result.denominator = denominator * sign;
+    return Object.freeze(result);
+  }
+
+  static #combine(value, other, subtract) {
+    const common = gcd(value.denominator, other.denominator);
+    const leftScale = other.denominator / common;
+    const rightScale = value.denominator / common;
+    const right = other.numerator * rightScale;
+    const numerator = value.numerator * leftScale + (subtract ? -right : right);
+    // With reduced operands, any factor still shared by the result is in common.
+    const remaining = gcd(numerator, common);
+    return Decimal.#reduced(numerator / remaining,
+      rightScale * (other.denominator / remaining));
+  }
+
   add(value) {
-    const other = Decimal.from(value);
-    return new Decimal(this.numerator * other.denominator + other.numerator * this.denominator,
-      this.denominator * other.denominator);
+    return Decimal.#combine(this, Decimal.from(value), false);
   }
 
   sub(value) {
-    const other = Decimal.from(value);
-    return new Decimal(this.numerator * other.denominator - other.numerator * this.denominator,
-      this.denominator * other.denominator);
+    return Decimal.#combine(this, Decimal.from(value), true);
   }
 
   mul(value) {
     const other = Decimal.from(value);
-    return new Decimal(this.numerator * other.numerator, this.denominator * other.denominator);
+    const left = gcd(this.numerator, other.denominator);
+    const right = gcd(other.numerator, this.denominator);
+    return Decimal.#reduced((this.numerator / left) * (other.numerator / right),
+      (this.denominator / right) * (other.denominator / left));
   }
 
   div(value) {
     const other = Decimal.from(value);
-    return new Decimal(this.numerator * other.denominator, this.denominator * other.numerator);
+    if (other.numerator === 0n) throw new RangeError('Divisione per zero.');
+    const top = gcd(this.numerator, other.numerator);
+    const bottom = gcd(this.denominator, other.denominator);
+    return Decimal.#reduced((this.numerator / top) * (other.denominator / bottom),
+      (this.denominator / bottom) * (other.numerator / top));
   }
 
   cmp(value) {

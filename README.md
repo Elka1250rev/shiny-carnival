@@ -30,7 +30,11 @@ npm test
 npm run check
 ```
 
-I test verificano il motore di calcolo e il formato CSV; il controllo aggiuntivo verifica i file del progetto. GitHub Actions esegue entrambi i comandi con Node.js 24, senza pubblicare il sito.
+I test verificano aritmetica, motore di calcolo, formato CSV, importazione asincrona e sequenza delle operazioni; il controllo aggiuntivo verifica i file del progetto. Il workflow **Controlli** esegue entrambi i comandi con Node.js 24 sui push e sulle pull request.
+
+## Modifiche al progetto
+
+Usare un branch dedicato per ogni modifica e aprire una pull request verso `main`. Non pubblicare modifiche direttamente su `main`. Verificare i test e i controlli prima di proporre l'unione della pull request; l'unione in `main` avvia la pubblicazione del sito.
 
 ## Dati ed esportazione
 
@@ -40,17 +44,15 @@ Il formato usa UTF-8, separatore `;`, date `AAAA-MM-GG` e punto decimale senza s
 
 L'applicazione usa aritmetica decimale esatta per i calcoli interni. L'imposta stimata viene arrotondata ai centesimi; le quantità e gli importi visualizzati possono essere abbreviati senza modificare i dati sorgente esportati.
 
+Storici molto lunghi con numerose vendite parziali e quantità a 18 decimali possono ancora richiedere diversi secondi di calcolo: l'aritmetica esatta conserva frazioni via via più complesse.
+
 ## Pubblicazione su GitHub Pages
 
-Il sito può essere ospitato su GitHub Pages perché tutti i calcoli avvengono nel browser. Questo repository contiene un workflow di controllo, **senza deployment automatico**.
+Il sito è pubblicato su [GitHub Pages](https://elka1250rev.github.io/shiny-carnival/): tutti i calcoli avvengono nel browser.
 
-Per pubblicarlo manualmente:
+In **Settings → Pages → Build and deployment**, la sorgente deve essere **GitHub Actions**. Il workflow `.github/workflows/pages.yml` pubblica il contenuto di `dist/` quando una modifica arriva su `main`; i branch e le pull request eseguono i controlli senza aggiornare il sito pubblico. È disponibile anche l'avvio manuale del workflow Pages.
 
-1. Pubblicare il contenuto di `dist/` nella radice di un ramo dedicato, per esempio `gh-pages`.
-2. In GitHub, aprire **Settings → Pages → Build and deployment**.
-3. Selezionare **Deploy from a branch**, il ramo dedicato e la cartella **/(root)**.
-
-In alternativa, un futuro workflow Pages può caricare `dist/` come artefatto del sito. Non serve alcun servizio applicativo o database. Il server di hosting riceve le normali richieste per i file statici; i dati finanziari restano nella pagina.
+Non serve alcun servizio applicativo o database. Il server di hosting riceve le normali richieste per i file statici; i dati finanziari restano nella pagina.
 
 ## Struttura e ampliamenti
 

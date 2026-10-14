@@ -7,7 +7,7 @@ const VALID_TYPES = new Set(['acquisto', 'vendita']);
 const decimalPattern = /^\d{1,30}(?:\.\d{1,18})?$/;
 const unsafeText = /^[\s\uFEFF]*[=+\-@]/u;
 const controlCharacters = /[\u0000-\u001f\u007f-\u009f]/u;
-const isDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
+const isDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && value >= '0001-01-01'
   && Number.isFinite(Date.parse(value + 'T00:00:00Z'))
   && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value;
 const isAsset = value => typeof value === 'string' && value === value.trim().toUpperCase()
@@ -116,11 +116,6 @@ export function validateDataset(data) {
       if (transactionKeys.has(key)) report(location + '.order', 'Ordine duplicato nella stessa data: assegna ordini distinti.');
       transactionKeys.add(key);
     }
-    if (transaction.type === 'acquisto' && isAsset(transaction.asset) && isDate(transaction.date) && isOrder(transaction.order)) {
-      const key = JSON.stringify([transaction.asset, transaction.date, transaction.order]);
-      if (acquisitionKeys.has(key)) report(location + '.order', 'Questo ordine coincide con un lotto iniziale dello stesso asset e data.');
-      acquisitionKeys.add(key);
-    }
     if (dateValid && isOrder(transaction.order) && VALID_TYPES.has(transaction.type) && isAsset(transaction.asset) && quantity) {
       goodTransactions.push({ ...transaction, quantityDecimal: quantity, location });
     }
@@ -147,10 +142,6 @@ export function validateDataset(data) {
     checkAmount(loss.amount, location + '.amount', true);
   });
   return errors;
-}
-
-function fiscalCost(holding) {
-  return sum(holding.lots.map(lot => lot.quantity.mul(lot.unitCost)));
 }
 
 function calculateTax(data, calculatedRows, selectedYear) {
@@ -189,7 +180,7 @@ function calculateTax(data, calculatedRows, selectedYear) {
 }
 
 /** All portfolio rows are calculated; tax includes only the selected calendar year. */
-export function calculate(data, selectedYear = Number(data?.openingDate?.slice(0, 4))) {
+export function calculate(data, selectedYear = typeof data?.openingDate === 'string' ? Number(data.openingDate.slice(0, 4)) : NaN) {
   const errors = validateDataset(data);
   if (!YEARS.includes(selectedYear)) errors.push({ location: 'selectedYear', message: 'Il calcolo fiscale supporta gli anni 2025 e 2026.' });
   else if (isDate(data?.openingDate) && selectedYear < Number(data.openingDate.slice(0, 4))) {
@@ -198,16 +189,18 @@ export function calculate(data, selectedYear = Number(data?.openingDate?.slice(0
   if (errors.length) throw new ValidationError(errors);
   const portfolios = new Map();
   const getHolding = asset => {
-    if (!portfolios.has(asset)) portfolios.set(asset, { asset, quantity: ZERO, cost: ZERO, lots: [] });
+    if (!portfolios.has(asset)) portfolios.set(asset, { asset, quantity: ZERO, cost: ZERO, fiscalCost: ZERO, lots: [] });
     return portfolios.get(asset);
   };
   for (const initial of data.initialLots) {
     const holding = getHolding(initial.asset);
     const quantity = Decimal.from(initial.quantity);
     const unitCost = Decimal.from(initial.unitCost);
+    const cost = quantity.mul(unitCost);
     holding.quantity = holding.quantity.add(quantity);
-    holding.cost = holding.cost.add(quantity.mul(unitCost));
-    holding.lots.push({ id: initial.id, acquiredOn: initial.acquiredOn, order: initial.order, quantity, unitCost });
+    holding.cost = holding.cost.add(cost);
+    holding.fiscalCost = holding.fiscalCost.add(cost);
+    holding.lots.push({ id: initial.id, acquiredOn: initial.acquiredOn, order: initial.order, quantity, unitCost, initial: true });
   }
   const calculatedRows = [];
   for (const transaction of [...data.transactions].sort(chronological)) {
@@ -217,7 +210,7 @@ export function calculate(data, selectedYear = Number(data?.openingDate?.slice(0
     const fees = Decimal.from(transaction.fees);
     const beforeQuantity = holding.quantity;
     const beforeAverage = average(holding.cost, holding.quantity);
-    const fiscalBeforeAverage = average(fiscalCost(holding), holding.quantity);
+    const fiscalBeforeAverage = average(holding.fiscalCost, holding.quantity);
     const lotDetails = [];
     let proceeds = null;
     let costBasis;
@@ -227,12 +220,15 @@ export function calculate(data, selectedYear = Number(data?.openingDate?.slice(0
       costBasis = quantity.mul(price).add(fees);
       holding.quantity = holding.quantity.add(quantity);
       holding.cost = holding.cost.add(costBasis);
-      holding.lots.push({ id: transaction.id, acquiredOn: transaction.date, order: transaction.order, quantity, unitCost: costBasis.div(quantity) });
+      holding.fiscalCost = holding.fiscalCost.add(costBasis);
+      holding.lots.push({ id: transaction.id, acquiredOn: transaction.date, order: transaction.order, quantity, unitCost: costBasis.div(quantity), initial: false });
     } else {
       proceeds = quantity.mul(price).sub(fees);
       let remaining = quantity;
       costBasis = ZERO;
-      holding.lots.sort((left, right) => right.acquiredOn.localeCompare(left.acquiredOn) || right.order - left.order);
+      // Opening holdings precede all transactions, including purchases on the opening day.
+      holding.lots.sort((left, right) => right.acquiredOn.localeCompare(left.acquiredOn)
+        || Number(left.initial) - Number(right.initial) || right.order - left.order);
       for (const lot of holding.lots) {
         if (remaining.cmp(ZERO) === 0) break;
         const used = lot.quantity.min(remaining);
@@ -244,6 +240,7 @@ export function calculate(data, selectedYear = Number(data?.openingDate?.slice(0
         remaining = remaining.sub(used);
       }
       holding.lots = holding.lots.filter(lot => lot.quantity.cmp(ZERO) > 0);
+      holding.fiscalCost = holding.fiscalCost.sub(costBasis);
       const managementCost = beforeAverage.mul(quantity);
       fiscalResult = proceeds.sub(costBasis);
       managementResult = proceeds.sub(managementCost);
@@ -255,7 +252,7 @@ export function calculate(data, selectedYear = Number(data?.openingDate?.slice(0
       quantity: quantity.toString(), unitPrice: price.toString(), fees: fees.toString(),
       beforeQuantity: beforeQuantity.toString(), beforeAverage: beforeAverage.toString(),
       afterQuantity: holding.quantity.toString(), afterAverage: average(holding.cost, holding.quantity).toString(),
-      fiscalBeforeAverage: fiscalBeforeAverage.toString(), fiscalAfterAverage: average(fiscalCost(holding), holding.quantity).toString(),
+      fiscalBeforeAverage: fiscalBeforeAverage.toString(), fiscalAfterAverage: average(holding.fiscalCost, holding.quantity).toString(),
       proceeds: proceeds?.toString() ?? null, costBasis: costBasis.toString(),
       fiscalResult: fiscalResult?.toString() ?? null, managementResult: managementResult?.toString() ?? null,
       lotDetails, exactFiscalResult: fiscalResult,
@@ -264,7 +261,7 @@ export function calculate(data, selectedYear = Number(data?.openingDate?.slice(0
   const tax = calculateTax(data, calculatedRows, selectedYear);
   const rows = calculatedRows.map(({ exactFiscalResult, ...row }) => row);
   const holdings = [...portfolios.values()].sort((left, right) => left.asset.localeCompare(right.asset)).map(holding => {
-    const fiscal = fiscalCost(holding);
+    const fiscal = holding.fiscalCost;
     return { asset: holding.asset, quantity: holding.quantity.toString(), average: average(holding.cost, holding.quantity).toString(),
       cost: holding.cost.toString(), fiscalCost: fiscal.toString(), fiscalAverage: average(fiscal, holding.quantity).toString() };
   });
