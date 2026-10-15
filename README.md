@@ -13,6 +13,7 @@ L'applicazione è statica: i dati inseriti rimangono nella memoria della pagina.
 - Importazione CSV con anteprima e validazione, esportazione dei dati ricaricabili e CSV separato del prospetto dei risultati.
 - Riepilogo PDF con plusvalenza o minusvalenza per ogni operazione e riepilogo fiscale dell'anno selezionato.
 - Importatori separati dal modello e dal calcolo, per aggiungere in seguito altri formati. Excel non è implementato.
+- Pagina **Come funziona**, raggiungibile dal menu: istruzioni, formule, esempi LIFO, commissioni, compensazioni e limiti del calcolo. Si apre in una nuova scheda per conservare la sessione del calcolatore.
 
 Il **prezzo medio ponderato gestionale** e il **costo fiscale LIFO** sono due valori distinti. Una vendita lascia invariato il prezzo medio gestionale finché rimangono unità; il calcolo fiscale consuma invece i lotti più recenti. Il dettaglio delle regole e dei limiti è in [docs/FISCALITA.md](docs/FISCALITA.md).
 
@@ -33,7 +34,7 @@ npm run check
 
 I test verificano aritmetica, motore di calcolo, formato CSV, importazione asincrona, sequenza delle operazioni e riepilogo PDF; il controllo aggiuntivo verifica i file del progetto. Il workflow **Controlli** esegue entrambi i comandi con Node.js 24 sui push e sulle pull request.
 
-Il job **PDF in Chrome** scarica i PDF reali prodotti dal sito con dati sintetici, anche con emulazione di un telefono Android e stampa disattivata. Controlla testo, dimensioni delle pagine, impaginazione, collegamento per ripetere il download e conservazione della sessione. I PDF e le anteprime sono disponibili come artefatto della verifica per sette giorni. Questi test usano Playwright 1.58.2, Chrome, Poppler e i font Noto CJK, installati soltanto nell'ambiente di test. Con tali strumenti disponibili, la verifica si avvia con `npm run test:pdf-browser`. L'emulazione non sostituisce una prova sul gestore download di un telefono fisico.
+Il job **PDF in Chrome** scarica i PDF reali prodotti dal sito con dati sintetici, anche con emulazione di un telefono Android e stampa disattivata. Controlla testo, dimensioni delle pagine, impaginazione, collegamento per ripetere il download e conservazione della sessione. I PDF e le anteprime sono disponibili come artefatto della verifica per sette giorni. Questi test usano Playwright 1.58.2, Chrome, Poppler e i font Noto CJK, installati soltanto nell'ambiente di test. Con tali strumenti disponibili, la verifica si avvia con `npm run test:pdf-browser`. L'emulazione non sostituisce una prova sul gestore download di un telefono fisico. Il job verifica anche la guida su schermo mobile e controlla che aprirla conservi i dati della sessione originale.
 
 ## Modifiche al progetto
 

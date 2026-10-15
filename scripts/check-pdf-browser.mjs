@@ -95,6 +95,28 @@ async function downloadSession(page, filename) {
   return readFile(path, 'utf8');
 }
 
+async function verifyGuide(page) {
+  const session = await downloadSession(page, 'guide-session-before');
+  const originalUrl = page.url();
+  const newTab = page.context().waitForEvent('page');
+  await page.locator('#guide-link').click();
+  const guide = await newTab;
+  await guide.waitForLoadState('load');
+  assert.match(guide.url(), /\/guida\.html$/);
+  assert.match(await guide.locator('h1').textContent(), /Come funziona/);
+  const content = await guide.locator('main').textContent();
+  assert.match(content, /LIFO/);
+  assert.match(content, /10\.000/);
+  assert.match(content, /CSV/);
+  assert.equal(await guide.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'The guide must fit a mobile viewport.');
+  await guide.screenshot({ path: resolve(artifacts, 'guida-mobile.png'), fullPage: true });
+  assert.deepEqual(await guide.evaluate(() => window.__cspViolations), [], 'The guide must preserve the Content Security Policy.');
+  await guide.close();
+  assert.equal(page.url(), originalUrl, 'Opening the guide must keep the calculator tab open.');
+  assert.equal(await downloadSession(page, 'guide-session-after'), session, 'Reading the guide must preserve the current session.');
+  console.log('PASS guida: mobile page opens separately and preserves the session.');
+}
+
 function inspectPdf(path) {
   const command = (name, args) => execFileSync(name, args, { encoding: 'utf8', timeout: 10000, maxBuffer: 8 * 1024 * 1024 });
   const info = command('pdfinfo', [path]);
@@ -213,6 +235,7 @@ try {
   assert.equal(await page.evaluate(() => matchMedia('(pointer: coarse)').matches), true);
 
   await importDataset(page, mixed, 'BTC', 2);
+  await verifyGuide(page);
   await exportPdf(page, 'mixed-2026', 5, 2026, pdf => {
     assert.match(pdf.normalized, /anno 2026/);
     assert.match(pdf.normalized, /33%/);
