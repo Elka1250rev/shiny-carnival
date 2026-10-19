@@ -62,4 +62,4 @@ Dopo l'importazione, **Esporta dati** produce il CSV CriptoConti versione 2. Il 
 
 I file e le scelte restano nella memoria della pagina: non sono trasmessi a un servizio fiscale, non vengono usati cookie e non esiste salvataggio automatico. Chiudendo o ricaricando la pagina si perde ciò che non è stato esportato. Il CSV v2 contiene anche gli eventuali indirizzi e metadati originali: conservarlo sul proprio dispositivo.
 
-Le regole fiscali, i limiti e le fonti sono descritti in [FISCALITA.md](FISCALITA.md); il contratto ricaricabile è in [CSV.md](CSV.md). Excel resta predisposto come futuro adattatore e non è implementato.
+Le regole fiscali, i limiti e le fonti sono descritti in [FISCALITA.md](FISCALITA.md); il contratto ricaricabile è in [CSV.md](CSV.md). La situazione iniziale può essere importata anche dal tracciato Excel descritto in [EXCEL-INIZIALE.md](EXCEL-INIZIALE.md), mantenendo aperta la verifica del CSV. Dopo la conferma dell'Excel, i lotti sono già aggiornati nella sessione; il CSV delle operazioni richiede ancora la propria conferma.

@@ -56,6 +56,7 @@ export function validateDataset(data) {
   const lossYears = new Set();
   const balances = new Map();
   const goodTransactions = [];
+  const openingAssets = new Map();
   const checkId = (row, location) => {
     if (typeof row.id !== 'string' || !row.id.trim() || row.id.length > 64
       || controlCharacters.test(row.id) || unsafeText.test(row.id)) {
@@ -88,8 +89,13 @@ export function validateDataset(data) {
     if (!checkObject(lot, location)) return;
     checkId(lot, location);
     if (!isAsset(lot.asset)) report(location + '.asset', 'Usa un nome asset maiuscolo, senza spazi iniziali o finali, fino a 50 caratteri.');
-    if (!isDate(lot.acquiredOn) || openingValid && lot.acquiredOn > data.openingDate) {
-      report(location + '.acquiredOn', 'La data di acquisto deve essere valida e non successiva all’apertura.');
+    const estimated = lot.basisMethod === 'estimated_average';
+    if (Object.hasOwn(lot, 'basisMethod') && (data.version !== 2 || !estimated)) report(location + '.basisMethod', 'Il costo medio stimato richiede il formato 2 e basisMethod estimated_average.');
+    const sameAsset = openingAssets.get(lot.asset);
+    if (sameAsset !== undefined && (estimated || data.initialLots[sameAsset].basisMethod === 'estimated_average')) report(location + '.asset', 'Il saldo iniziale aggregato stimato deve essere l’unico lotto iniziale di questa crypto; ricostruisci i lotti documentati prima di suddividerlo.');
+    if (sameAsset === undefined) openingAssets.set(lot.asset, index);
+    if (estimated ? lot.acquiredOn !== '' : !isDate(lot.acquiredOn) || openingValid && lot.acquiredOn > data.openingDate) {
+      report(location + '.acquiredOn', estimated ? 'Il saldo aggregato stimato deve avere data originaria vuota: non attribuire una data inventata.' : 'La data di acquisto deve essere valida e non successiva all’apertura.');
     }
     if (!isOrder(lot.order)) report(location + '.order', 'L’ordine deve essere un intero non negativo.');
     const quantity = checkAmount(lot.quantity, location + '.quantity', true);
@@ -396,6 +402,7 @@ export function calculate(data, selectedYear = typeof data?.openingDate === 'str
       cost: holding.cost.toString(), fiscalCost: fiscal.toString(), fiscalAverage: average(fiscal, holding.quantity).toString() };
   });
   const warnings = [];
+  if (data.initialLots.some(lot => lot.basisMethod === 'estimated_average')) warnings.push('Sono presenti saldi iniziali a prezzo medio storico stimato, con date di acquisto non disponibili. I risultati e l’imposta sono indicativi: i singoli lotti LIFO iniziali non sono ricostruiti. Puoi correggere i costi nella Situazione iniziale.');
   if (!data.openingDate.endsWith('-01-01')) warnings.push('Il riepilogo annuale comprende solo le operazioni dalla data di apertura: per l’imposta annuale occorre includere tutte le operazioni dell’anno.');
   if (tax.expiredLosses.length) warnings.push('Le minusvalenze pregresse scadute sono escluse dalla compensazione.');
   return { rows, holdings, tax, warnings };

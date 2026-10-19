@@ -107,4 +107,9 @@ Esportare **Esporta dati** prima di chiudere o ricaricare la pagina e ricaricarl
 
 ## Futuri formati
 
-Gli adattatori producono lo stesso dataset normalizzato e condividono validazione e motore. Excel resta un'estensione futura: non sono letti file `.xlsx` o `.xls` e non è stabilito un tracciato di foglio Excel.
+Gli adattatori producono lo stesso dataset normalizzato e condividono validazione e motore. Per la situazione iniziale è disponibile un lettore `.xlsx` separato, descritto in [EXCEL-INIZIALE.md](EXCEL-INIZIALE.md). Le operazioni restano importabili in CSV; `.xls` e altri tracciati Excel non sono supportati.
+
+
+## Saldi iniziali a prezzo medio storico stimato (versione 2)
+
+Una riga `iniziale` può avere `data_acquisto_originale` vuota soltanto se `dati_estesi` contiene `{"basisMethod":"estimated_average"}`. È un saldo aggregato con costo medio stimato e data di acquisto non disponibile, non un lotto LIFO documentato. Lo stesso asset non può avere contemporaneamente altri lotti iniziali. La versione 1 non ammette questo indicatore. Il motore segnala che i risultati e l’imposta sono indicativi; l’indicatore sopravvive al ripristino, alle modifiche del costo e al riepilogo PDF.
