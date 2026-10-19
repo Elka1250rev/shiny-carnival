@@ -135,6 +135,9 @@ async function recordImportClickTarget(page, source) {
 }
 
 
+// Mobile Chrome can report different layout and visual viewport coordinates.
+// Native touch uses visual coordinates; DOM hit testing uses layout coordinates. Verify both
+// independently and assert the trusted touch and click reach the intended button.
 async function activateCanonicalImport(page) {
   const button = page.locator('#confirm-import');
   const touch = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
@@ -145,7 +148,7 @@ async function activateCanonicalImport(page) {
   const target = await button.evaluate(element => {
     const box = element.getBoundingClientRect();
     const viewport = visualViewport;
-    if (!viewport) return { error: 'VisualViewport is required for this mobile coordinate experiment.' };
+    if (!viewport) return { error: 'VisualViewport is required for mobile touch verification.' };
     const left = Math.max(box.left, viewport.offsetLeft);
     const right = Math.min(box.right, viewport.offsetLeft + viewport.width);
     const top = Math.max(box.top, viewport.offsetTop);
@@ -161,7 +164,7 @@ async function activateCanonicalImport(page) {
     };
   });
   assert.equal(target.error, undefined);
-  assert.ok(Math.abs(target.scale - 1) < 0.000001, 'This native-touch experiment requires visualViewport.scale exactly 1.');
+  assert.ok(Math.abs(target.scale - 1) < 0.000001, 'The mobile test requires an unzoomed visual viewport.');
   assert.ok(target.intersection.width > 0 && target.intersection.height > 0, 'The import confirmation must intersect the visual viewport.');
   assert.equal(target.layoutHitMatches, true, 'The independent layout-coordinate hit test must target the import button.');
   assert.ok(target.tap.x >= 0 && target.tap.y >= 0 && target.tap.x < target.visual.width && target.tap.y < target.visual.height,
