@@ -12,7 +12,7 @@ const blankOptions = () => ({
 const decimalInput = value => value.trim().replace(',', '.');
 
 /** Explicit fiscal review of source data, kept only for the open import dialog. */
-export function createExchangeReview({ container, onChange = () => {}, onAddInitialLot = null }) {
+export function createExchangeReview({ container, onChange = () => {}, onAddInitialLot = null, onImportInitial = null }) {
   const doc = container.ownerDocument;
   const prefix = `exchange-review-${++reviewSequence}`;
   let parsed = null;
@@ -391,6 +391,10 @@ export function createExchangeReview({ container, onChange = () => {}, onAddInit
     ], options.mode, value => { options.mode = value; });
     initialSummary = paragraph(initial, '');
     updateInitialSummary();
+    if (typeof onImportInitial === 'function') initial.append(button('Importa situazione iniziale da Excel', () => {
+      if (openEditorId !== null) { setErrors([UNSAVED_MESSAGE]); return; }
+      onImportInitial();
+    }));
     checkbox(initial, 'Confermo data e ora come riportate nel CSV, senza conversione del fuso. A parità di secondo si mantiene l’ordine delle righe nel file.', 'dateConfirmed');
     balanceBox = element('div', 'exchange-review-balance-check');
     initial.append(balanceBox);

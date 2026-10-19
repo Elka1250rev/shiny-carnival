@@ -7,6 +7,7 @@ import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, devices } from 'playwright';
 import { exportCsv, parseCsv } from '../dist/csv.js';
 import { EXCHANGE_CSV_COLUMNS } from '../dist/exchange-csv.js';
+import { verifyOpeningXlsx } from '../tests/browser/opening-xlsx.mjs';
 
 // These fixtures are synthetic. No financial data or external service is used.
 const project = fileURLToPath(new URL('../', import.meta.url));
@@ -839,6 +840,10 @@ try {
   });
   await verifyOpeningLotRecovery(await newPage({ viewport: { width: 1280, height: 900 } }, 'opening-recovery-desktop'), 'desktop');
   await verifyOpeningLotRecovery(await newPage(devices['Pixel 7'], 'opening-recovery-mobile'), 'mobile');
+  for (const [label, options] of [['desktop', { viewport: { width: 1280, height: 900 } }], ['mobile', devices['Pixel 7']]]) {
+    await verifyOpeningXlsx({ page: await newPage(options, 'opening-xlsx-' + label), label, artifacts, activateButton, importDataset,
+      downloadSession, openExchangeReview, exchangeSourceRow, results });
+  }
   assert.deepEqual(errors, [], 'The browser must not report JavaScript errors.');
   assert.deepEqual(externalRequests, [], 'PDF export must not send requests outside the local application.');
   for (const context of contexts) {

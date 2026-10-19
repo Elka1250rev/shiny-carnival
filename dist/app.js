@@ -6,6 +6,7 @@ import { createImportSession } from './import-session.js';
 import { parseExchangeCsv } from './exchange-csv.js';
 import { convertExchangeCsv } from './exchange-import.js';
 import { createExchangeReview } from './exchange-review.js';
+import { createOpeningImport } from './opening-review.js';
 import { buildPdfReportData } from './pdf-report.js';
 import { createPdfDownload } from './pdf-download.js';
 
@@ -41,7 +42,28 @@ const exchangeReview = createExchangeReview({ container: $('exchange-review'), o
   // A quantity shortfall is not evidence of an acquisition date or tax cost.
   $('field-acquiredOn').value = '';
   $('entry-description').textContent += ' Il lotto viene salvato subito nella sessione, anche se annulli poi l’importazione. Il CSV sarà applicato solo dopo la conferma finale.';
+}, onImportInitial: () => {
+  clearTimeout(reviewTimer);
+  reviewedDataset = null;
+  $('confirm-import').disabled = true;
+  openingImport.open();
 } });
+const openingImport = createOpeningImport({
+  dialog: $('opening-import-dialog'), getDataset: () => dataset,
+  validate: next => {
+    calculate(next, Math.max(selectedYear, Number(next.openingDate.slice(0, 4))));
+    exportCsv(next);
+  },
+  apply: next => {
+    commit(next, 'Situazione iniziale importata. Esporta il CSV della sessione per conservarla.');
+    if (!exchangeReview.active) { view = 'lots'; renderLedger(); }
+  },
+  onClose: () => {
+    if (!exchangeReview.active || !$('import-dialog').open) return;
+    exchangeReview.updateDataset(dataset);
+    reviewExchange();
+  }
+});
 let confirmationAction = null;
 let toastTimer;
 let result = calculate(dataset, selectedYear);
@@ -172,6 +194,7 @@ function renderLedger() {
   $('asset-filter').disabled = view === 'losses';
   $('report-button').hidden = view !== 'transactions';
   $('pdf-button').hidden = view !== 'transactions';
+  $('opening-import-button').hidden = view !== 'lots';
   document.querySelectorAll('[data-view]').forEach(button => {
     button.classList.toggle('active', button.dataset.view === view);
     if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
@@ -419,6 +442,7 @@ $('pdf-button').addEventListener('click', exportPdf);
 $('demo-button').addEventListener('click', loadExample);
 $('template-button').addEventListener('click', () => download(exportCsv(exampleDataset()), 'criptoconti-esempio.csv'));
 $('import-button').addEventListener('click', openImport);
+$('opening-import-button').addEventListener('click', () => openingImport.open());
 $('import-dialog').addEventListener('close', resetImport);
 $('import-file').addEventListener('change', event => { if (event.target.files[0]) readFile(event.target.files[0]); else resetImport(); });
 $('confirm-import').addEventListener('click', () => {

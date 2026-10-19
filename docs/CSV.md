@@ -107,4 +107,4 @@ Esportare **Esporta dati** prima di chiudere o ricaricare la pagina e ricaricarl
 
 ## Futuri formati
 
-Gli adattatori producono lo stesso dataset normalizzato e condividono validazione e motore. Excel resta un'estensione futura: non sono letti file `.xlsx` o `.xls` e non è stabilito un tracciato di foglio Excel.
+Gli adattatori producono lo stesso dataset normalizzato e condividono validazione e motore. Per la situazione iniziale è disponibile un lettore `.xlsx` separato, descritto in [EXCEL-INIZIALE.md](EXCEL-INIZIALE.md). Le operazioni restano importabili in CSV; `.xls` e altri tracciati Excel non sono supportati.
