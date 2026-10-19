@@ -1,73 +1,86 @@
 # Regole fiscali supportate
 
-Il calcolatore riguarda **persone fisiche residenti in Italia, fuori dall'attività d'impresa, in regime dichiarativo**, che acquistano o vendono cripto-attività ordinarie contro euro. Il risultato è una stima basata sui dati forniti: non certifica la correttezza della documentazione, della categoria fiscale dell'asset o della dichiarazione.
+Il calcolatore riguarda **persone fisiche residenti in Italia, fuori dall'attività d'impresa, in regime dichiarativo**. Gestisce compravendite contro euro, permute classificate esplicitamente e proventi da detenzione qualificati dall'utente. Non certifica documentazione, natura fiscale degli asset o correttezza della dichiarazione.
 
-## Annualità
+## Annualità e limiti
 
 | Anno dell'operazione | Aliquota ordinaria | Soglia di esenzione |
 | --- | --- | --- |
 | 2025 | 26% | Nessuna |
 | 2026 | 33% | Nessuna |
 
-Il motore accetta transazioni soltanto per queste annualità. La situazione iniziale deve avere una data nel 2025 o nel 2026 e le transazioni devono essere successive o coincidenti con quella data. Le date originarie dei lotti iniziali possono appartenere ad anni precedenti.
+Il motore accetta apertura e transazioni nel 2025 o nel 2026; le transazioni non possono precedere l'apertura. Le date originarie dei lotti iniziali possono risalire ad anni precedenti. Per l'imposta di un intero anno occorrono tutte le operazioni dal 1° gennaio: un'apertura successiva produce un riepilogo parziale.
 
-Per stimare l'imposta dell'intero anno, occorre includere tutte le operazioni dal 1° gennaio. Un'apertura successiva produce un riepilogo parziale; i lotti iniziali ricostruiscono le disponibilità ma non le plusvalenze o minusvalenze realizzate prima dell'apertura.
+La legge 207/2024, art. 1, commi 24–25, ha introdotto il 33% dal 2026 ed eliminato la soglia di 2.000 euro dal 2025. La legge 199/2025, art. 1, comma 28, ha previsto il 26% per determinati token di moneta elettronica denominati in euro e la neutralità della mera conversione euro/token e del rimborso nominale in euro. **Questo trattamento speciale non è implementato**: non inserire tali operazioni nell'aliquota ordinaria senza verificarne la disciplina. Il ticker non identifica automaticamente la categoria fiscale.
 
-Le modifiche delle aliquote e l'eliminazione della soglia a partire dal 2025 derivano dalla legge 207/2024. La legge 199/2025 ha previsto una disciplina specifica per determinati token di moneta elettronica denominati in euro: questa categoria è esclusa dalla prima versione. L'applicazione non individua le categorie fiscali dal nome dell'asset.
+## Commissioni: costo gestionale e costo fiscale distinti
 
-## Prezzo medio gestionale e LIFO fiscale
-
-Il portafoglio mostra un prezzo medio ponderato gestionale:
+La circolare AdE 30/E del 27 ottobre 2023, § 3.1, p. 50, interpreta l'art. 68, comma 9-bis, escludendo i costi inerenti l'acquisto e la cessione dalla determinazione dei redditi crypto. Il motore distingue quindi:
 
 ```text
-nuovo costo gestionale = costo gestionale precedente + quantità acquistata × prezzo unitario + commissioni
-nuovo prezzo medio = nuovo costo gestionale / nuova quantità
+nuovo costo gestionale = costo gestionale precedente + controvalore dell'acquisto + commissioni
+nuovo prezzo medio gestionale = nuovo costo gestionale / nuova quantità
+costo fiscale del nuovo lotto = controvalore dell'acquisto, esclusi gli oneri
+risultato fiscale della vendita = corrispettivo lordo − costo fiscale dei lotti ceduti in LIFO
+risultato gestionale della vendita = ricavo al netto delle commissioni − costo medio gestionale ceduto
 ```
 
-Una vendita riduce il costo gestionale in proporzione alle unità vendute e lascia invariato il prezzo medio delle unità residue. Quando la quantità arriva a zero, il prezzo medio non è definito.
+Una vendita riduce proporzionalmente il costo gestionale e lascia invariato il prezzo medio delle unità residue. A saldo zero la media non è definita. Fiscalmente si consumano invece prima i lotti più recenti, secondo il LIFO descritto al § 3.2.1 della circolare.
 
-Per il risultato fiscale viene applicato il **LIFO** descritto dalla circolare dell'Agenzia delle Entrate 30/E/2023, paragrafo 3.2.1: si considerano cedute per prime le unità acquistate più recentemente. Per questo il costo fiscale della vendita può differire dal costo calcolato usando la media gestionale.
+Esempio: acquisto di 2 unità a 100 euro con 10 euro di commissioni. Il costo gestionale è 210 euro (105 per unità), quello fiscale 200 euro (100 per unità). Vendendo un'unità a 130 euro con commissione 2 si ottengono **30 euro di plusvalenza fiscale** e 23 euro di risultato gestionale. Vendendo l'altra a 90 euro con commissione 2 si ottengono **10 euro di minusvalenza fiscale** e −17 euro gestionali. Nello stesso anno il saldo fiscale è 20 euro, quello gestionale 6 euro.
 
-```text
-ricavo netto = quantità venduta × prezzo unitario − commissioni della vendita
-risultato fiscale = ricavo netto − costo dei lotti consumati in LIFO
-```
+Un importo effettivo già netto delle commissioni non è necessariamente il corrispettivo lordo richiesto per il calcolo fiscale. Nell'importazione exchange i valori originali restano conservati; l'utente deve verificare e, quando necessario, rettificare gli importi fiscali. Il sito non ricostruisce un lordo incerto e non applica nuovamente commissioni già comprese.
 
-Le commissioni dell'acquisto concorrono al costo del nuovo lotto. Le commissioni storiche dei lotti iniziali devono essere già incluse nel loro costo unitario. La prima versione gestisce soltanto commissioni espresse e pagate in euro.
+## Lotti iniziali e dati delle versioni precedenti
 
-Esempio senza commissioni: acquistare 1 BTC a 30.000 euro, poi 1 BTC a 50.000 euro, produce un prezzo medio di 40.000 euro. Vendere successivamente 1 BTC a 60.000 euro produce una plusvalenza fiscale LIFO di 10.000 euro. La media gestionale del BTC residuo resta 40.000 euro; il suo lotto fiscale ha costo 30.000 euro.
+Ogni lotto iniziale indica quantità residua, data originaria e **costo unitario fiscale documentato, esclusi gli oneri**. Se era stato parzialmente ceduto, inserire solo il residuo. Un saldo con il solo prezzo medio non ricostruisce il LIFO. Il software non inventa costi o lotti mancanti e non riconosce automaticamente successioni, donazioni o rivalutazioni.
 
-## Situazione iniziale e documentazione
+Le precedenti versioni chiedevano di includere le commissioni storiche nei lotti iniziali: **i file già esportati devono essere verificati e corretti manualmente** rispetto alla documentazione. La versione del CSV non permette di separare retroattivamente una commissione incorporata nel costo. Non è applicata una migrazione stimata. Lo stesso costo iniziale viene usato come base di partenza gestionale e fiscale; gli oneri storici non sono un campo separato.
 
-Ogni lotto iniziale rappresenta una quantità ancora disponibile alla data di apertura, con la sua **data originaria di acquisto** e il costo unitario riconosciuto. Se un lotto è stato parzialmente venduto prima dell'apertura, va indicata soltanto la quantità residua.
+L'ordine delle operazioni della stessa data deve riflettere la sequenza effettiva. I lotti iniziali precedono tutte le operazioni, anche nella data di apertura; la loro sequenza è distinta da quella delle operazioni. Una cessione superiore alla disponibilità blocca il calcolo.
 
-Un saldo unico con prezzo medio non permette di ricostruire automaticamente il LIFO. L'utente deve disporre dei lotti e della documentazione dei costi: il software non riconosce automaticamente rivalutazioni fiscali, successioni, donazioni o costi mancanti. Un'operazione antecedente alla situazione iniziale non va inserita di nuovo tra le transazioni del periodo.
+## Permute tra cripto-attività
 
-L'ordine delle operazioni dello stesso giorno deve riflettere la loro sequenza effettiva. Una vendita superiore alla disponibilità produce un errore; non vengono simulati saldi negativi o vendite allo scoperto.
+L'art. 67, comma 1, lettera c-sexies), esclude le permute **tra attività aventi eguali caratteristiche e funzioni**, non ogni scambio crypto/crypto. La circolare 30/E, § 3.1, pp. 47–49, descrive per esempio lo scambio bitcoin/ether come neutrale e l'acquisto di un NFT con criptovaluta come rilevante. Per le stablecoin distingue EMT e ART sulla base dei diritti e delle funzioni: la sola etichetta stablecoin non basta.
 
-I lotti della situazione iniziale precedono tutte le operazioni inserite, anche quando la data originaria di acquisto coincide con la data di apertura. La sequenza dei lotti iniziali ordina soltanto quei lotti per asset e data; la sequenza delle operazioni è distinta e può ripartire da 1. Per esempio, con un lotto iniziale acquistato nella data di apertura a 100 euro e un nuovo acquisto nella stessa data a 200 euro, la vendita successiva utilizza per primo il nuovo acquisto da 200 euro, qualunque sia la sequenza assegnata al lotto iniziale.
+- **Permuta neutrale:** nessuna plusvalenza o minusvalenza al momento dello scambio. Il costo storico fiscale dei lotti ceduti viene attribuito proporzionalmente alle unità ricevute; il valore corrente EUR non rivaluta il costo. Il costo gestionale consumato viene anch'esso trasferito.
+- **Permuta imponibile:** risultato pari al valore normale documentato della cripto ricevuta meno il costo fiscale LIFO ceduto. Lo stesso valore costituisce il costo del nuovo lotto ricevuto.
 
-## Minusvalenze e compensazione
+Per le permute neutrali il sito richiede una scelta esplicita fra conservare le date storiche dei lotti ceduti (`historical`) oppure usare la data dello scambio (`exchange`). La data incide sul LIFO successivo. **Questa scelta non è presentata come una prescrizione espressa della norma**: deve essere verificata rispetto alla fattispecie e alla documentazione, anche con il professionista. Le provenienze originarie dei lotti restano tracciate.
 
-Il motore somma algebricamente le plusvalenze e le minusvalenze del periodo. Compensa un saldo positivo con le minusvalenze della stessa categoria fiscale, già dichiarate e ancora utilizzabili, partendo da quelle che scadono prima.
+La classificazione nell'importatore avviene per coppia di asset e vale per le righe di quella coppia. Se la stessa coppia richiede trattamenti diversi, occorre riconciliare i dati prima dell'importazione. Non è disponibile un riconoscimento automatico di NFT, security token, EMT o altri regimi speciali.
 
-Le minusvalenze pregresse richiedono l'anno di origine e **l'importo residuo dichiarato e disponibile alla data di apertura**. Sono utilizzabili entro i quattro periodi d'imposta successivi all'anno di origine. Per esempio, una minusvalenza del 2022 può essere utilizzata fino al 2026; una del 2021 è scaduta nel 2026. L'applicazione esclude dal calcolo le perdite scadute e le segnala.
+## Premi EARN e proventi da detenzione
 
-Per le annualità fino al 2024, l'eventuale requisito storico dell'eccedenza di minusvalenze superiore a 2.000 euro riguarda la perdita originaria dichiarata. Un residuo disponibile oggi può essere inferiore a 2.000 euro: il motore non lo elimina per questo motivo. L'utente deve verificare la provenienza e l'effettiva disponibilità del credito fiscale.
+L'art. 68, comma 9-bis, ultimo periodo, assoggetta i proventi da detenzione a tassazione nel periodo della percezione senza deduzioni. La circolare 30/E, § 3.1, p. 51, comprende lo staking e richiede il **provento lordo**, anche se la piattaforma trattiene una commissione. I proventi in natura si valorizzano secondo l'art. 9 TUIR.
 
-Un saldo negativo del periodo viene mostrato come perdita potenzialmente riportabile. Il suo utilizzo futuro dipende dalla corretta dichiarazione; il software non la presenta né registra alcun credito presso l'Agenzia delle Entrate. Le perdite di altre categorie di redditi finanziari non sono accettate come minusvalenze pregresse crypto.
+La descrizione `Receive / Reward / EARN` non dimostra la natura del reddito. L'importatore permette una qualificazione per singola riga. Un provento confermato da detenzione è imponibile alla ricezione: non è un semplice acquisto gratuito che rinvia tutta la tassazione alla vendita. Per un premio di altra natura, per esempio promozionale, può essere registrato un ingresso come acquisto con costo fiscale totale esplicitamente documentato (`documented_acquisition`). Questa registrazione non dichiara il premio esente e non calcola eventuali obblighi derivanti dalla sua diversa qualificazione. Se la natura non è verificata, non si deve completare la conversione attribuendole automaticamente quella di provento da detenzione o di acquisto gratuito.
 
-L'imposta stimata è il saldo imponibile non negativo moltiplicato per l'aliquota dell'anno. L'aritmetica interna è esatta; l'importo finale è arrotondato ai centesimi, con metà centesimo arrotondato verso l'alto.
+Il **costo fiscale dei token ricevuti per le vendite future è un dato distinto dal provento imponibile**. Il sito non afferma una regola generale di costo zero né un automatico riconoscimento del valore già tassato: richiede una scelta documentata di costo zero, valore già tassato oppure costo totale per singola riga. Una conferma dell'utente non sostituisce la documentazione fiscale. Il costo gestionale del token ricevuto corrisponde al provento EUR inserito.
 
-## Operazioni e obblighi esclusi
+I depositi EUR sono conservati come movimenti informativi: non generano reddito e non costituiscono un portafoglio di liquidità usato per autorizzare gli acquisti.
 
-Non sono gestiti permute fra crypto, proventi da staking, lending o DeFi, derivati, NFT, donazioni, successioni, rivalutazioni e trattamenti speciali dei token di moneta elettronica in euro. Sono esclusi il monitoraggio fiscale, i quadri dichiarativi e l'imposta sul valore o sul possesso delle cripto-attività. L'importo stimato riguarda esclusivamente l'imposta sui risultati delle compravendite supportate.
+## Minusvalenze e imposta
 
-## Fonti
+Il motore somma plusvalenze, proventi da detenzione e minusvalenze crypto del periodo, secondo la compensazione descritta dalla circolare 30/E, § 3.1, p. 50. Il requisito di proventi lordi esclude la deduzione delle loro commissioni; non viene trasformato in un'esclusione automatica dalla compensazione. Le istruzioni AdE 730/2026 riuniscono i corrispettivi da cessione, permuta e detenzione nella sezione V.
 
-- [Agenzia delle Entrate, circolare 30/E del 27 ottobre 2023](https://www.agenziaentrate.gov.it/portale/documents/20143/5589638/Circolare+criptoattivita+del+27+ottobre+2023.pdf/1154a95a-80ea-a6ec-bcc0-731b844db9e6): disciplina delle cripto-attività; LIFO nel regime dichiarativo al paragrafo 3.2.1.
-- [Legge 30 dicembre 2024, n. 207](https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:2024-12-30;207): modifiche alle aliquote e alla soglia.
-- [Legge 30 dicembre 2025, n. 199](https://www.normattiva.it/eli/id/2025/12/30/25G00212/ORIGINAL): disciplina relativa ai token di moneta elettronica denominati in euro.
-- [Agenzia delle Entrate, quadro T](https://infoprecompilata.agenziaentrate.gov.it/portale/web/guest/quadro-t): indicazioni dichiarative, soglia e compensazione delle minusvalenze.
+Un saldo positivo viene compensato con le minusvalenze crypto già dichiarate e ancora utilizzabili, partendo da quelle che scadono prima. Il residuo pregresso deve essere disponibile all'apertura e appartenere alla stessa categoria: non sono ammesse perdite di altre categorie finanziarie. La scadenza è il quarto periodo successivo all'origine; per esempio, una perdita 2022 è utilizzabile fino al 2026, una del 2021 è scaduta nel 2026.
 
-L'implementazione è limitata alle regole descritte qui. Un nuovo anno fiscale o un nuovo tipo di operazione richiede un aggiornamento esplicito del motore e della documentazione.
+Per perdite originate fino al 2024, il requisito storico dell'eccedenza di 2.000 euro riguarda la perdita originaria dichiarata. Un residuo oggi più basso non viene per questo eliminato: occorre verificarne l'effettiva disponibilità. Un saldo negativo del periodo è mostrato come perdita potenzialmente riportabile; il suo utilizzo dipende dalla corretta dichiarazione.
+
+L'imponibile non negativo è moltiplicato per l'aliquota dell'anno. L'aritmetica interna è esatta; l'imposta finale è arrotondata ai centesimi, con metà centesimo verso l'alto. I totali EUR importati sono conservati direttamente, senza ricostruirli da prezzi unitari arrotondati.
+
+## Esclusioni
+
+Restano esclusi gli anni diversi dal 2025–2026, regimi speciali EMT in euro, derivati, attività d'impresa, successioni, donazioni e rivalutazioni automatiche; la classificazione di prodotti DeFi complessi o NFT richiede un'analisi specifica. L'opzione di permuta imponibile non certifica che un asset sia nel perimetro dell'art. 67, lettera c-sexies). Non sono calcolati monitoraggio, quadri dichiarativi, imposta sul valore o sul possesso e bollo.
+
+## Fonti verificate
+
+- [TUIR, art. 67](https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.presidente.repubblica:1986-12-22;917~art67!vig=), lettera c-sexies): fattispecie e neutralità delle permute omogenee.
+- [TUIR, art. 68](https://def.finanze.it/DocTribFrontend/getAttoNormativoDetail.do?ACTION=getArticolo&articolo=Articolo+68&codiceOrdinamento=0000000000000680000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000&id=%7B31D694E8-4398-4030-873B-FEAF5A6647F9%7D), comma 9-bis: determinazione del reddito, costi documentati e proventi da detenzione.
+- [TUIR, art. 9](https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:1986-12-22;917~art9=): valorizzazione dei proventi in natura.
+- [AdE, circolare 30/E del 27 ottobre 2023, collegamento ufficiale](https://www.agenziaentrate.gov.it/portale/documents/20143/5589638/Circolare+criptoattivita+del+27+ottobre+2023.pdf); [copia del documento verificata](https://www.dirittobancario.it/wp-content/uploads/2023/10/Circolare-Agenzia-delle-Entrate-27-ottobre-2023-n.-30-E.pdf): § 3.1, pp. 47–51, e § 3.2.1 per il LIFO dichiarativo. La circolare precede le modifiche 2025–2026 a soglia e aliquota.
+- [Legge 207/2024](https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:2024-12-30;207), art. 1, commi 24–25; [legge 199/2025](https://www.normattiva.it/eli/id/2025/12/30/25G00212/ORIGINAL), art. 1, comma 28.
+- [AdE, istruzioni 730/2026](https://www.agenziaentrate.gov.it/portale/730-2026/modello-e-istruzioni); [copia aggiornata al 13 aprile 2026](https://www.informazionefiscale.it/IMG/pdf/730_2026_istruzioni_agg_13_04_2026_1_.pdf), pp. 130–131, sezione V.
+
+Un nuovo anno o una nuova fattispecie richiede un aggiornamento esplicito del motore e della documentazione.

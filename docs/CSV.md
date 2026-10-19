@@ -1,44 +1,87 @@
-# CSV ricaricabile, versione 1
+# CSV ricaricabile: versioni 1 e 2
 
-Il CSV conserva i dati sorgente del calcolo. Importazione ed esportazione usano lo stesso formato; il prospetto dei risultati ha un formato diverso e non può essere ricaricato come dataset.
+Il CSV ricaricabile conserva la situazione iniziale, le operazioni e le minusvalenze pregresse. Il **Prospetto CSV** esporta invece i risultati e non può ripristinare una sessione. Il CSV originale a 17 colonne della piattaforma ha un adattatore separato, descritto in [CSV-EXCHANGE.md](CSV-EXCHANGE.md).
 
-## Convenzioni
+## Convenzioni comuni
 
-- Codifica UTF-8 e separatore `;`.
-- Intestazione obbligatoria con tutte le colonne indicate qui sotto. L'esportazione usa questo ordine; l'importazione accetta anche colonne riordinate.
-- Campo `versione` uguale a `1` in ogni riga.
-- Date nel formato `AAAA-MM-GG`.
-- Numeri senza separatori delle migliaia; punto decimale nel formato esportato. Sono ammessi fino a 18 decimali nei dati numerici.
-- Campi non applicabili lasciati vuoti; commissioni pari a zero scritte `0` nelle transazioni.
-- Identificativi `id` stabili e univoci per lotti, transazioni e minusvalenze pregresse.
-- `ordine` intero non negativo, per ricostruire la sequenza delle operazioni della stessa data. Le transazioni nella stessa data devono avere ordini distinti; i lotti iniziali devono avere ordini distinti per asset e data originaria.
-- Prezzi e commissioni sempre in euro. Il prezzo delle transazioni è **unitario**, non il controvalore totale.
+- UTF-8, separatore `;`, intestazione obbligatoria; le colonne possono essere riordinate ma non duplicate.
+- Date `AAAA-MM-GG`; numeri senza separatori delle migliaia, fino a 30 cifre intere e 18 decimali. L'esportazione usa il punto; il parser accetta anche una virgola decimale semplice.
+- `id` stabile e univoco fra lotti, transazioni e perdite; massimo 64 caratteri, senza controlli o prefissi di formula `=`, `+`, `-`, `@`.
+- `ordine` intero non negativo e distinto fra tutte le operazioni della stessa data. Per i lotti iniziali l'unicità riguarda asset e data originaria; la loro sequenza è distinta.
+- Nomi degli asset maiuscoli, coerenti fra tutte le righe della stessa attività. Il nome non certifica la categoria fiscale.
+- Quantità positive; prezzi, commissioni e costi non negativi. Campi non applicabili vuoti; commissioni zero scritte `0` nelle transazioni.
+- Massimo 5.000 righe di dati, oltre alla configurazione, e 5 MiB per file. L'eventuale operazione derivata per una commissione in una terza crypto concorre al limite di righe.
 
-Il parser gestisce campi CSV tra virgolette doppie; una virgoletta interna si scrive due volte. Il formato canonico esportato usa il punto decimale; l'importatore accetta anche una virgola decimale semplice, senza separatori delle migliaia.
+Il lettore gestisce virgolette doppie, separatori e ritorni a capo nei campi quotati. Una virgoletta interna è raddoppiata. La versione è uniforme in tutte le righe.
+
+## Versione 1 e compatibilità
 
 ```csv
 versione;tipo;id;data;ordine;cripto;quantita;prezzo_unitario_eur;commissioni_eur;data_acquisto_originale;anno_minusvalenza;importo_eur
 ```
 
+Con `versione=1` sono ammessi configurazione, lotti iniziali, acquisti, vendite e minusvalenze pregresse. I file esistenti rimangono leggibili. Il loro ricalcolo usa le regole fiscali attuali: **le commissioni non sono deducibili fiscalmente**. I vecchi lotti iniziali in cui erano stati incorporati oneri devono essere verificati e corretti manualmente; il file non permette di ricostruire automaticamente la quota di commissione.
+
+## Versione 2
+
+La versione 2 aggiunge una colonna e nuovi tipi di transazione:
+
+```csv
+versione;tipo;id;data;ordine;cripto;quantita;prezzo_unitario_eur;commissioni_eur;data_acquisto_originale;anno_minusvalenza;importo_eur;dati_estesi
+```
+
+`dati_estesi` contiene JSON quotato secondo le regole CSV. Le stringhe decimali restano esatte; i campi sconosciuti o non compatibili con il tipo vengono respinti. L'esportazione conserva la versione del dataset: le operazioni exchange richiedono la 2, senza conversione al formato 1 che ne perderebbe i dati.
+
 ## Tipi di riga
 
-| Tipo | Campi richiesti | Significato |
+| Tipo | Campi oltre a `versione` e `tipo` | Significato |
 | --- | --- | --- |
-| `configurazione` | `versione`, `tipo`, `data` | Una sola riga: `data` è la data della situazione iniziale. Tutti gli altri campi sono vuoti. |
-| `iniziale` | `versione`, `tipo`, `id`, `data`, `ordine`, `cripto`, `quantita`, `prezzo_unitario_eur`, `data_acquisto_originale` | Lotto residuo alla data iniziale. `data` coincide con la configurazione; il prezzo è il costo unitario storico, con commissioni già incluse. |
-| `acquisto` | `versione`, `tipo`, `id`, `data`, `ordine`, `cripto`, `quantita`, `prezzo_unitario_eur`, `commissioni_eur` | Acquisto contro euro. |
-| `vendita` | Gli stessi campi di `acquisto` | Vendita contro euro; non può eccedere la disponibilità cronologica. |
-| `minusvalenza_pregressa` | `versione`, `tipo`, `id`, `anno_minusvalenza`, `importo_eur` | Residuo già dichiarato e ancora disponibile all'apertura, con anno di origine. Tutti gli altri campi sono vuoti. |
+| `configurazione` | `data` | Una sola riga, data della situazione iniziale. Gli altri campi sono vuoti. |
+| `iniziale` | `id`, `data`, `ordine`, `cripto`, `quantita`, `prezzo_unitario_eur`, `data_acquisto_originale` | Lotto residuo: `data` coincide con l'apertura e il prezzo è il costo unitario fiscale storico documentato, esclusi gli oneri. |
+| `acquisto` | `id`, `data`, `ordine`, `cripto`, `quantita`, `prezzo_unitario_eur`, `commissioni_eur` | Acquisto contro euro; il prezzo è unitario, non il totale. Le commissioni incidono sul costo gestionale. |
+| `vendita` | Come `acquisto` | Cessione contro euro; il prezzo è lordo fiscale. Le commissioni incidono soltanto sul risultato gestionale. |
+| `minusvalenza_pregressa` | `id`, `anno_minusvalenza`, `importo_eur` | Residuo complessivo per anno, già dichiarato e disponibile all'apertura. |
+| `permuta_neutrale` (v2) | Campi delle transazioni; prezzo `0`, commissioni `0`, dati estesi obbligatori | Cessione e ricezione di asset diversi, senza realizzo; trasferimento del costo storico. |
+| `permuta_imponibile` (v2) | Come sopra | Realizzo al valore normale documentato dell'asset ricevuto, nuovo lotto allo stesso costo. |
+| `provento` (v2) | Campi delle transazioni; prezzo `0`, commissioni `0`, dati estesi obbligatori | Provento da detenzione imponibile lordo alla percezione e ingresso delle unità ricevute. |
+| `deposito_eur` (v2) | Campi delle transazioni; `cripto=EUR`, prezzo `1`, commissioni `0` | Movimento informativo, privo di risultato fiscale. Non ricostruisce un conto EUR. |
 
-Le quantità devono essere positive; prezzi e commissioni devono essere non negativi. Un costo unitario nullo non dimostra da solo che quel costo sia fiscalmente riconosciuto. L'importo di una minusvalenza pregressa deve essere positivo.
+Apertura e operazioni devono ricadere nel 2025 o 2026; nessuna operazione può precedere l'apertura. Le date originarie dei lotti non possono essere successive all'apertura. Le minusvalenze pregresse hanno anno dal 2021 al 2025, precedente all'anno di apertura; massimo una riga per anno. La scadenza è verificata nel calcolo.
 
-Sono supportate date di apertura e transazioni del 2025 e del 2026. La data originaria di acquisto di un lotto deve essere precedente o coincidente con l'apertura. Le transazioni non possono precedere l'apertura. L'anno di una minusvalenza pregressa deve precedere l'anno di apertura: si inserisce il residuo disponibile, non l'importo originario già utilizzato in parte.
+## Contenuto di `dati_estesi`
 
-Il dataset può contenere al massimo 5.000 righe complessive fra lotti, transazioni e minusvalenze pregresse, oltre alla configurazione. Per le perdite pregresse è prevista una sola riga con il residuo complessivo per anno di origine, dal 2021 al 2025. La scadenza viene valutata nel calcolo. Nel dataset i nomi delle crypto devono essere maiuscoli: l'interfaccia normalizza l'inserimento manuale, mentre un CSV con nomi non canonici viene segnalato dalla validazione prima dell'importazione.
+| Campo JSON | Impiego |
+| --- | --- |
+| `totalEur` | Controvalore totale EUR esatto. Se presente su acquisto/vendita, prevale su quantità × prezzo unitario. Obbligatorio per provento e permuta imponibile; non ammesso per permuta neutrale. |
+| `receivedAsset` | Asset ricevuto nelle due permute, diverso da `cripto`. |
+| `receivedQuantity` | Quantità positiva ricevuta nelle due permute. |
+| `lotDatePolicy` | Solo permuta neutrale: `historical` mantiene le date storiche; `exchange` usa la data dello scambio. Scelta esplicita che influisce sul LIFO, non una regola fiscale attestata dal sito. |
+| `rewardCostEur` | Solo provento: costo fiscale totale documentato dei token ricevuti per le future cessioni; obbligatorio anche quando la scelta documentata è zero. È distinto dal provento lordo imponibile `totalEur`. |
+| `source` | Facoltativo, conserva provenienza, tutte le 17 stringhe originali dell'exchange e decisioni esplicite di conversione. |
 
-## Esempio
+`source` ha `line` (numero di riga originale), `values` (tutte e sole le 17 colonne indicate in [CSV-EXCHANGE.md](CSV-EXCHANGE.md)), eventuale `decisions` e booleano `derived` per una commissione convertita in cessione separata. In `decisions` sono ammessi:
 
-Questo è il contenuto di [examples/esempio.csv](../examples/esempio.csv):
+- `swapTaxTreatment`: `neutral`, `taxable`, `not_applicable`;
+- `rewardTreatment`: `holding_income`, `documented_acquisition`, `not_applicable`;
+- `rewardCostPolicy`: `zero_confirmed`, `received_value_confirmed`, `manual`, `not_applicable`;
+- `amountsPolicy`: `as_reported_confirmed`, `manual`;
+- `feePolicy`: `already_included`, `separate_taxable_disposal`, `not_applicable`;
+- `lotDatePolicy`: `historical`, `exchange`, `not_applicable`;
+- `grossValuesConfirmed`: booleano.
+
+Un premio verificato come ingresso di diversa natura (`documented_acquisition`) è normalizzato come `acquisto`, con `totalEur` pari al costo esplicitamente documentato; non genera automaticamente provento da detenzione. Ciò non attesta l'esenzione del premio né assolve obblighi di altre categorie fiscali. Il costo zero richiede conferma esplicita.
+
+Le rettifiche sono nei campi normalizzati: non sovrascrivono `source.values`. Quantità e controvalori originali, entrambe le parti dello scambio, commissioni e metadati rimangono disponibili nell'export ricaricabile. Il prospetto dei risultati aggiunge i dati delle nuove operazioni quando presenti, ma resta un formato di sola consultazione.
+
+Esempio del solo oggetto esteso di una permuta neutrale, prima della quotatura CSV:
+
+```json
+{"receivedAsset":"ETH","receivedQuantity":"2.5","lotDatePolicy":"historical"}
+```
+
+## Esempio semplice compatibile con la versione 1
+
+[examples/esempio.csv](../examples/esempio.csv) contiene:
 
 ```csv
 versione;tipo;id;data;ordine;cripto;quantita;prezzo_unitario_eur;commissioni_eur;data_acquisto_originale;anno_minusvalenza;importo_eur
@@ -48,26 +91,20 @@ versione;tipo;id;data;ordine;cripto;quantita;prezzo_unitario_eur;commissioni_eur
 1;vendita;tx-btc-2;2026-02-10;3;BTC;0.05;60000;5;;;
 ```
 
-Il lotto iniziale contiene 0,2 BTC acquistati originariamente il 1° marzo 2025. L'acquisto successivo aggiunge 0,1 BTC; la vendita consuma fiscalmente 0,05 BTC da questo lotto più recente. Le commissioni storiche del lotto iniziale sono già comprese nel costo unitario di 40.000 euro.
+Il lotto iniziale è residuo e il costo unitario fiscale di 40.000 euro deve escludere gli oneri. L'acquisto aggiunge 0,1 BTC; la vendita consuma 0,05 BTC dal nuovo lotto. Il corrispettivo lordo è 3.000 euro e il costo fiscale LIFO 2.500: **plusvalenza fiscale 500 euro**, imposta ordinaria 2026 di **165 euro**, in assenza di altre operazioni o perdite utilizzabili. Il ricavo gestionale netto della vendita è invece 2.995 euro.
 
-Il ricavo netto della vendita è 2.995 euro e il costo fiscale LIFO è 2.505 euro: la plusvalenza fiscale è 490 euro. Senza altre operazioni o perdite disponibili, l'imposta stimata per il 2026 è 161,70 euro.
-
-Una riga aggiuntiva per 500 euro di minusvalenza residua originata nel 2024 sarebbe:
+Una perdita residua 2024 di 500 euro, solo se già dichiarata e disponibile al 1° gennaio 2026, si rappresenta in versione 1 come:
 
 ```csv
 1;minusvalenza_pregressa;perdita-2024;;;;;;;;2024;500
 ```
 
-Inserirla solo se il residuo risulta già dichiarato e disponibile al 1° gennaio 2026.
+## Importazione, esportazione e riservatezza
 
-## Importazione ed esportazione
+L'importazione del CSV CriptoConti mostra un'anteprima e, dopo la conferma, sostituisce l'intero dataset. Quella exchange propone invece se sostituire soltanto le operazioni o aggiungerle, conservando lotti e perdite. Un file non valido non modifica la sessione. Quantità non disponibili, ID duplicati, campi mancanti e sequenze incoerenti impediscono un calcolo valido.
 
-L'importazione mostra un'anteprima e segnala gli errori prima di applicare il dataset. Un file non valido non modifica i dati in uso. L'importazione confermata sostituisce il dataset corrente: il CSV deve quindi contenere tutti i dati che si vogliono conservare.
-
-I risultati vengono ricalcolati ordinando le operazioni per data e ordine. Non dipendono dall'ordine fisico delle righe nel file. Identificativi duplicati, date non valide, dati mancanti e vendite superiori alla disponibilità impediscono un calcolo valido.
-
-Esportare il CSV ricaricabile prima di chiudere o ricaricare la pagina. Il download viene avviato dal browser e non invia il file al server. Conservare il file su un dispositivo a propria scelta: l'applicazione non mantiene copie.
+Esportare **Esporta dati** prima di chiudere o ricaricare la pagina e ricaricarlo nella sessione successiva. Il file viene creato nel browser, senza invii al server e senza copie conservate dall'applicazione. Il CSV v2 può contenere anche indirizzi e metadati originali dell'exchange: conservarlo come documentazione personale.
 
 ## Futuri formati
 
-Gli importatori sono registrati separatamente e restituiscono lo stesso dataset normalizzato. Un adattatore Excel potrà convertire fogli e colonne in configurazione, lotti, transazioni e perdite pregresse; validazione e calcoli resteranno condivisi. Questa versione non legge file `.xlsx` o `.xls` e non stabilisce ancora una struttura di foglio Excel.
+Gli adattatori producono lo stesso dataset normalizzato e condividono validazione e motore. Excel resta un'estensione futura: non sono letti file `.xlsx` o `.xls` e non è stabilito un tracciato di foglio Excel.

@@ -101,7 +101,7 @@ test('empty files, missing settings, duplicate settings and unsupported versions
   const nextVersion = [...transaction];
   nextVersion[0] = '2';
   assert.throws(() => parseCsv(csv([configuration, nextVersion])), /Riga 3.*versione CSV non supportata.*2/);
-  assert.throws(() => exportCsv({ ...dataset(), version: 2 }), /versione del dataset non supportata/);
+  assert.throws(() => exportCsv({ ...dataset(), version: 3 }), /versione del dataset non supportata/);
 });
 
 test('unknown operation types and nonempty reserved fields are rejected', () => {
@@ -220,10 +220,12 @@ test('the importer registry uses the common dataset and declines Excel explicitl
   assert.throws(() => parseImport('anything', 'operazioni.json'), /Formato di importazione non supportato/);
 });
 
-test('a sale report supports net proceeds below zero when fees exceed proceeds', () => {
+test('a sale report keeps negative management results separate from gross fiscal proceeds', () => {
   const output = exportReportCsv([{
     id: 'sale-1', date: '2026-02-10', order: 1, type: 'vendita', asset: 'BTC',
-    quantity: '0.01', unitPrice: '1', fees: '2', proceeds: '-1.99', fiscalResult: '-2.99', managementResult: '-2.99',
+    quantity: '0.01', unitPrice: '1', fees: '2', proceeds: '0.01', costBasis: '1', fiscalResult: '-0.99', managementResult: '-2.99',
   }]);
-  assert.ok(output.includes('"-1.99"'));
+  assert.ok(output.includes('"0.01"'));
+  assert.ok(output.includes('"-0.99"'));
+  assert.ok(output.includes('"-2.99"'));
 });

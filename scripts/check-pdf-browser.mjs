@@ -5,7 +5,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, devices } from 'playwright';
-import { exportCsv } from '../dist/csv.js';
+import { exportCsv, parseCsv } from '../dist/csv.js';
+import { EXCHANGE_CSV_COLUMNS } from '../dist/exchange-csv.js';
 
 // These fixtures are synthetic. No financial data or external service is used.
 const project = fileURLToPath(new URL('../', import.meta.url));
@@ -14,6 +15,10 @@ const address = 'http://127.0.0.1:18743';
 const started = Date.now();
 const errors = [];
 const results = [];
+const importClickAttempts = [];
+const viewportCheckpoints = [];
+const nativeConfirmActivations = [];
+const previousViewportState = new WeakMap();
 const compact = value => value.replace(/\s+/gu, ' ').trim();
 const withoutSpaces = value => value.replace(/\s+/gu, '');
 const occurrences = (value, needle) => value.split(needle).length - 1;
@@ -66,13 +71,151 @@ async function waitForServer() {
   throw new Error('Local server did not become ready within 10 seconds. ' + serverOutput);
 }
 
-async function importDataset(page, input, filter, filteredCount) {
+
+
+async function checkpointViewport(page, label) {
+  if (page.isClosed()) return;
+  const viewport = page.viewportSize();
+  const state = await page.evaluate(() => ({
+    inner: { width: innerWidth, height: innerHeight }, outer: { width: outerWidth, height: outerHeight },
+    client: { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight },
+    document: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },
+    body: { clientWidth: document.body?.clientWidth, clientHeight: document.body?.clientHeight,
+      scrollWidth: document.body?.scrollWidth, scrollHeight: document.body?.scrollHeight },
+    scroll: { x: scrollX, y: scrollY }, devicePixelRatio,
+    visual: visualViewport ? { width: visualViewport.width, height: visualViewport.height,
+      offsetLeft: visualViewport.offsetLeft, offsetTop: visualViewport.offsetTop,
+      pageLeft: visualViewport.pageLeft, pageTop: visualViewport.pageTop, scale: visualViewport.scale } : null,
+    activeElement: { tag: document.activeElement?.tagName, id: document.activeElement?.id },
+    openDialog: [...document.querySelectorAll('dialog[open]')].map(dialog => ({ id: dialog.id,
+      scrollTop: dialog.scrollTop, scrollHeight: dialog.scrollHeight, clientHeight: dialog.clientHeight }))
+  }));
+  const drift = [];
+  if (viewport && Math.abs(state.inner.width - viewport.width) > 1) drift.push('innerWidth≠emulatedWidth');
+  if (Math.abs(state.inner.width - state.client.width) > 1) drift.push('innerWidth≠clientWidth');
+  if (state.visual && Math.abs(state.visual.offsetTop) > 1) drift.push('visualOffsetTop');
+  if (state.visual && Math.abs(state.visual.offsetLeft) > 1) drift.push('visualOffsetLeft');
+  if (state.visual && Math.abs(state.visual.scale - 1) > 0.01) drift.push('visualScale');
+  const signature = JSON.stringify({ drift, inner: state.inner, client: state.client, visual: state.visual ? {
+    width: state.visual.width, height: state.visual.height, offsetLeft: state.visual.offsetLeft,
+    offsetTop: state.visual.offsetTop, scale: state.visual.scale } : null });
+  const previous = previousViewportState.get(page);
+  if (signature !== previous?.signature && (drift.length || previous?.drift.length)) {
+    console.log('VIEWPORT ' + JSON.stringify({ label, drift, viewport, inner: state.inner, client: state.client,
+      scroll: state.scroll, visual: state.visual }));
+  }
+  previousViewportState.set(page, { signature, drift });
+  viewportCheckpoints.push({ sequence: viewportCheckpoints.length + 1, elapsedMs: Date.now() - started, label,
+    url: page.url(), viewport, drift, state });
+  await writeFile(resolve(artifacts, 'viewport-checkpoints.json'), JSON.stringify(viewportCheckpoints, null, 2));
+}
+
+async function recordImportClickTarget(page, source) {
+  const state = await page.evaluate(() => {
+    const rect = element => element ? Object.fromEntries(['x', 'y', 'top', 'right', 'bottom', 'left', 'width', 'height']
+      .map(key => [key, element.getBoundingClientRect()[key]])) : null;
+    const describe = element => element ? {
+      tag: element.tagName, id: element.id, className: String(element.className || ''), rect: rect(element),
+      scrollTop: element.scrollTop, scrollLeft: element.scrollLeft,
+      clientWidth: element.clientWidth, clientHeight: element.clientHeight,
+      scrollWidth: element.scrollWidth, scrollHeight: element.scrollHeight
+    } : null;
+    const button = document.getElementById('confirm-import');
+    const box = rect(button);
+    const point = box ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : null;
+    return {
+      viewport: { innerWidth, innerHeight, scrollX, scrollY },
+      button: describe(button), dialog: describe(document.getElementById('import-dialog')),
+      footer: describe(button?.parentElement), point,
+      hit: point ? describe(document.elementFromPoint(point.x, point.y)) : null
+    };
+  });
+  importClickAttempts.push({ attempt: importClickAttempts.length + 1, source, url: page.url(), state });
+  await writeFile(resolve(artifacts, 'import-click-attempts.json'), JSON.stringify(importClickAttempts, null, 2));
+}
+
+
+// Mobile Chrome can report different layout and visual viewport coordinates.
+// Native touch uses visual coordinates; DOM hit testing uses layout coordinates. Verify both
+// independently and assert the trusted touch and click reach the intended button.
+async function activateCanonicalImport(page) {
+  const button = page.locator('#confirm-import');
+  const touch = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
+  if (!touch) { await button.click(); return; }
+  await button.scrollIntoViewIfNeeded();
+  await checkpointViewport(page, 'import:before-native-confirm-touch');
+  assert.equal(await button.isEnabled(), true, 'Native touch must target an enabled import confirmation.');
+  const target = await button.evaluate(element => {
+    const box = element.getBoundingClientRect();
+    const viewport = visualViewport;
+    if (!viewport) return { error: 'VisualViewport is required for mobile touch verification.' };
+    const left = Math.max(box.left, viewport.offsetLeft);
+    const right = Math.min(box.right, viewport.offsetLeft + viewport.width);
+    const top = Math.max(box.top, viewport.offsetTop);
+    const bottom = Math.min(box.bottom, viewport.offsetTop + viewport.height);
+    const layout = { x: (left + right) / 2, y: (top + bottom) / 2 };
+    const hit = document.elementFromPoint(layout.x, layout.y);
+    return {
+      scale: viewport.scale, intersection: { width: right - left, height: bottom - top }, layout,
+      visual: { offsetLeft: viewport.offsetLeft, offsetTop: viewport.offsetTop, width: viewport.width, height: viewport.height },
+      tap: { x: layout.x - viewport.offsetLeft, y: layout.y - viewport.offsetTop },
+      layoutHitMatches: hit === element || element.contains(hit),
+      layoutHit: hit ? { tag: hit.tagName, id: hit.id, className: String(hit.className || '') } : null
+    };
+  });
+  assert.equal(target.error, undefined);
+  assert.ok(Math.abs(target.scale - 1) < 0.000001, 'The mobile test requires an unzoomed visual viewport.');
+  assert.ok(target.intersection.width > 0 && target.intersection.height > 0, 'The import confirmation must intersect the visual viewport.');
+  assert.equal(target.layoutHitMatches, true, 'The independent layout-coordinate hit test must target the import button.');
+  assert.ok(target.tap.x >= 0 && target.tap.y >= 0 && target.tap.x < target.visual.width && target.tap.y < target.visual.height,
+    'The native tap must fall inside the visual viewport.');
+  await page.evaluate(() => {
+    window.__nativeConfirmEvents = [];
+    const handler = event => {
+      const button = document.getElementById('confirm-import');
+      const hit = event.target;
+      window.__nativeConfirmEvents.push({ type: event.type, pointerType: event.pointerType || '', isTrusted: event.isTrusted,
+        target: hit ? { tag: hit.tagName, id: hit.id, className: String(hit.className || '') } : null,
+        matchesButton: hit === button || button.contains(hit), clientX: event.clientX, clientY: event.clientY });
+    };
+    document.addEventListener('pointerup', handler, true);
+    document.addEventListener('click', handler, true);
+    window.__cleanupNativeConfirmEvents = () => {
+      document.removeEventListener('pointerup', handler, true);
+      document.removeEventListener('click', handler, true);
+    };
+  });
+  let events;
+  try {
+    await page.touchscreen.tap(target.tap.x, target.tap.y);
+    await page.waitForFunction(() => window.__nativeConfirmEvents.some(event => event.type === 'click'), null, { timeout: 3000 });
+  } finally {
+    events = await page.evaluate(() => {
+      window.__cleanupNativeConfirmEvents?.();
+      return window.__nativeConfirmEvents;
+    });
+    nativeConfirmActivations.push({ sequence: nativeConfirmActivations.length + 1, url: page.url(), target, events });
+    await writeFile(resolve(artifacts, 'native-confirm-activations.json'), JSON.stringify(nativeConfirmActivations, null, 2));
+    await checkpointViewport(page, 'import:after-native-confirm-touch');
+  }
+  assert.ok(events.some(event => event.type === 'pointerup' && event.pointerType === 'touch' && event.isTrusted && event.matchesButton),
+    'The actual trusted touch pointer event must reach the import button.');
+  assert.ok(events.some(event => event.type === 'click' && event.isTrusted && event.matchesButton),
+    'The actual trusted click generated by the native tap must reach the import button.');
+}
+
+async function importDataset(page, input, filter, filteredCount, { lineEnding = '\r\n' } = {}) {
+  await checkpointViewport(page, 'import:before-emulateMedia-screen');
   await page.emulateMedia({ media: 'screen' });
+  await checkpointViewport(page, 'import:after-emulateMedia-screen');
+  await checkpointViewport(page, 'import:before-open-dialog');
   await page.locator('#import-button').click();
-  await page.locator('#import-file').setInputFiles({ name: 'synthetic.csv', mimeType: 'text/csv', buffer: Buffer.from(exportCsv(input)) });
+  await checkpointViewport(page, 'import:after-open-dialog');
+  await page.locator('#import-file').setInputFiles({ name: 'synthetic.csv', mimeType: 'text/csv', buffer: Buffer.from(exportCsv(input).replaceAll('\r\n', lineEnding)) });
   await page.waitForFunction(() => !document.getElementById('confirm-import').disabled || !document.getElementById('import-error').hidden);
   assert.equal(await page.locator('#import-error').isVisible(), false, await page.locator('#import-error').textContent());
-  await page.locator('#confirm-import').click();
+  await recordImportClickTarget(page, { sourceTransactions: input.transactions.length, lineEnding: JSON.stringify(lineEnding) });
+  await activateCanonicalImport(page);
   await page.locator('#import-dialog').waitFor({ state: 'hidden' });
   await page.locator('#tax-year').selectOption('2026');
   await page.locator('#asset-filter').fill(filter);
@@ -96,12 +239,17 @@ async function downloadSession(page, filename) {
 }
 
 async function verifyGuide(page) {
+  await checkpointViewport(page, 'guide:before-session-before');
   const session = await downloadSession(page, 'guide-session-before');
+  await checkpointViewport(page, 'guide:after-session-before');
   const originalUrl = page.url();
+  await checkpointViewport(page, 'guide:main-before-open');
   const newTab = page.context().waitForEvent('page');
   await page.locator('#guide-link').click();
   const guide = await newTab;
   await guide.waitForLoadState('load');
+  await checkpointViewport(page, 'guide:main-after-open');
+  await checkpointViewport(guide, 'guide:new-tab-after-open');
   assert.match(guide.url(), /\/guida\.html$/);
   assert.match(await guide.locator('h1').textContent(), /Come funziona/);
   const content = await guide.locator('main').textContent();
@@ -109,11 +257,17 @@ async function verifyGuide(page) {
   assert.match(content, /10\.000/);
   assert.match(content, /CSV/);
   assert.equal(await guide.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'The guide must fit a mobile viewport.');
+  await checkpointViewport(page, 'guide:main-before-guide-screenshot');
   await guide.screenshot({ path: resolve(artifacts, 'guida-mobile.png'), fullPage: true });
+  await checkpointViewport(page, 'guide:main-after-guide-screenshot');
+  await checkpointViewport(guide, 'guide:new-tab-after-screenshot');
   assert.deepEqual(await guide.evaluate(() => window.__cspViolations), [], 'The guide must preserve the Content Security Policy.');
+  await checkpointViewport(page, 'guide:main-before-guide-close');
   await guide.close();
+  await checkpointViewport(page, 'guide:main-after-guide-close');
   assert.equal(page.url(), originalUrl, 'Opening the guide must keep the calculator tab open.');
   assert.equal(await downloadSession(page, 'guide-session-after'), session, 'Reading the guide must preserve the current session.');
+  await checkpointViewport(page, 'guide:after-session-after');
   console.log('PASS guida: mobile page opens separately and preserves the session.');
 }
 
@@ -148,13 +302,18 @@ function inspectPdf(path) {
 
 async function exportPdf(page, name, expectedRows, year, verify, { retry = false } = {}) {
   const originalTitle = await page.title();
+  await checkpointViewport(page, name + ':before-session-before');
   const sessionBefore = await downloadSession(page, name + '-session-before');
+  await checkpointViewport(page, name + ':after-session-before');
   const ledgerBefore = await page.locator('#ledger-content').innerHTML();
   const filterBefore = await page.locator('#asset-filter').inputValue();
   const expectedFilename = `criptoconti-operazioni-anno-${year}.pdf`;
+  await checkpointViewport(page, name + ':before-pdf-button');
   const pending = page.waitForEvent('download', { timeout: 20000 });
   await page.locator('#pdf-button').click();
+  await checkpointViewport(page, name + ':after-pdf-button');
   const download = await pending;
+  await checkpointViewport(page, name + ':after-pdf-download');
   assert.equal(await download.failure(), null, 'The generated PDF must be downloadable.');
   assert.equal(download.suggestedFilename(), expectedFilename, 'The download name must identify the selected tax year.');
   const path = resolve(artifacts, name + '.pdf');
@@ -172,13 +331,20 @@ async function exportPdf(page, name, expectedRows, year, verify, { retry = false
   const href = await page.locator('#pdf-download-link').getAttribute('href');
   assert.match(href, /^blob:/, 'The PDF link must refer to bytes generated locally.');
   assert.equal(await page.locator('#pdf-download-link').getAttribute('target'), '_blank');
+  await checkpointViewport(page, name + ':before-notice-scrollIntoView');
   await page.locator('#pdf-download-notice').scrollIntoViewIfNeeded();
+  await checkpointViewport(page, name + ':after-notice-scrollIntoView');
+  await checkpointViewport(page, name + ':before-screenshot');
   await page.screenshot({ path: resolve(artifacts, name + '-ui.png') });
+  await checkpointViewport(page, name + ':after-screenshot');
 
   if (retry) {
+    await checkpointViewport(page, name + ':before-retry-click');
     const repeated = page.waitForEvent('download');
     await page.locator('#pdf-download-link').click();
+    await checkpointViewport(page, name + ':after-retry-click');
     const retryDownload = await repeated;
+    await checkpointViewport(page, name + ':after-retry-download');
     assert.equal(await retryDownload.failure(), null);
     assert.equal(retryDownload.suggestedFilename(), expectedFilename);
     const retryPath = resolve(artifacts, name + '-retry.pdf');
@@ -187,7 +353,10 @@ async function exportPdf(page, name, expectedRows, year, verify, { retry = false
     assert.equal(await page.locator('#pdf-download-link').getAttribute('href'), href);
   }
 
-  assert.equal(await downloadSession(page, name + '-session-after'), sessionBefore, 'PDF export must preserve every field in the recoverable session.');
+  await checkpointViewport(page, name + ':before-session-after');
+  const sessionAfter = await downloadSession(page, name + '-session-after');
+  await checkpointViewport(page, name + ':after-session-after');
+  assert.equal(sessionAfter, sessionBefore, 'PDF export must preserve every field in the recoverable session.');
   const pdf = inspectPdf(path);
   assert.match(pdf.normalized, new RegExp(`Operazioni: ${expectedRows}\\.`), 'The PDF must include all operations despite the active screen filter.');
   await Promise.all([
@@ -222,7 +391,230 @@ async function newPage(options, label) {
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   await page.goto(address, { waitUntil: 'networkidle', timeout: 15000 });
+  await checkpointViewport(page, label + ':initial-page');
   return page;
+}
+
+
+const exchangeSourceRow = overrides => ({
+  id: 'exchange-buy', datetime_tz_CET: '2025-08-01-12:00:00', type: 'Buy',
+  label: '', market_model_type: 'SPOT', order_type: 'MARKET',
+  sent_amount: '100.00', sent_currency: 'EUR', sent_value_EUR: '100.00', sent_address: '',
+  received_amount: '3', received_currency: 'ALFA', received_value_EUR: '99.50', received_address: '',
+  fee_amount: '0', fee_currency: '', fee_value_EUR: '0', ...overrides
+});
+const exchangeSource = [
+  exchangeSourceRow({ id: 'exchange-deposit', datetime_tz_CET: '2025-07-31-12:00:00', type: 'Deposit',
+    sent_amount: '0', sent_currency: '', sent_value_EUR: '0', received_amount: '100', received_currency: 'EUR', received_value_EUR: '100' }),
+  exchangeSourceRow({ label: '<img src=x onerror="window.__exchangeXss = true">', sent_address: 'synthetic, "quoted" address' }),
+  exchangeSourceRow({ id: 'exchange-swap', datetime_tz_CET: '2025-08-02-12:00:00', type: 'Trade',
+    sent_amount: '1', sent_currency: 'ALFA', sent_value_EUR: '33.333333333333333333',
+    received_amount: '2', received_currency: 'BETA', received_value_EUR: '42.00' }),
+  exchangeSourceRow({ id: 'exchange-reward', datetime_tz_CET: '2025-08-03-12:00:00', type: 'Receive', label: 'Reward', market_model_type: 'EARN',
+    sent_amount: '0', sent_currency: '', sent_value_EUR: '0', received_amount: '0.500000000000000001', received_value_EUR: '20.00' }),
+  exchangeSourceRow({ id: 'exchange-cashback', datetime_tz_CET: '2025-08-03-13:00:00', type: 'Receive', label: 'Reward', market_model_type: 'EARN',
+    sent_amount: '0', sent_currency: '', sent_value_EUR: '0', received_amount: '0.25', received_value_EUR: '9.00' }),
+  exchangeSourceRow({ id: 'exchange-sell', datetime_tz_CET: '2025-08-04-12:00:00', type: 'Sell',
+    sent_amount: '2', sent_currency: 'BETA', sent_value_EUR: '100', received_amount: '100', received_currency: 'EUR', received_value_EUR: '100' })
+];
+function sourceCsv(rows) {
+  return [EXCHANGE_CSV_COLUMNS, ...rows.map(row => EXCHANGE_CSV_COLUMNS.map(name => row[name]))]
+    .map(fields => fields.map(value => '"' + value.replaceAll('"', '""') + '"').join(',')).join('\r\n');
+}
+async function openExchangeReview(page, rows) {
+  await page.locator('#import-button').click();
+  await page.locator('#import-file').setInputFiles({ name: 'synthetic-platform.csv', mimeType: 'text/csv', buffer: Buffer.from(sourceCsv(rows)) });
+  await page.locator('#exchange-review').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#exchange-review .exchange-review-table tbody tr').count(), rows.length,
+    'The source preview must show every source row, including informational deposits and rewards.');
+}
+async function assertReviewBlocked(page, description) {
+  const button = page.locator('#confirm-import');
+  await page.waitForFunction(() => !document.getElementById('confirm-import').disabled
+    || [...document.querySelectorAll('#exchange-review .exchange-review-errors')].some(node => !node.hidden));
+  if (!await button.isDisabled()) {
+    await button.click();
+    assert.equal(await page.locator('#import-dialog').isVisible(), true, description);
+    const visibleErrors = page.locator('#import-error:visible, #exchange-review .exchange-review-errors:visible');
+    assert.ok(await visibleErrors.count() > 0, 'A blocked import must explain the missing choices or unsupported data.');
+  }
+  assert.equal(await page.locator('#import-dialog').isVisible(), true, description);
+}
+async function verifyExchangeImport(page, label) {
+  const initial = dataset({ initialLots: [lot('RESIDUO', '1', '5')] });
+  await importDataset(page, initial, '', 0);
+  const originalSession = await downloadSession(page, 'exchange-' + label + '-original-session');
+  await openExchangeReview(page, exchangeSource);
+  await assertReviewBlocked(page, 'Source rows must not become transactions until required choices are explicit.');
+  await page.locator('#import-dialog').getByRole('button', { name: 'Annulla', exact: true }).click();
+  assert.equal(await downloadSession(page, 'exchange-' + label + '-cancelled-session'), originalSession,
+    'Reviewing or cancelling an incomplete source CSV must preserve the current session.');
+
+  await openExchangeReview(page, [exchangeSourceRow({ id: 'unsupported-type', type: 'Withdraw' })]);
+  await assertReviewBlocked(page, 'An unsupported record must block import instead of being silently dropped.');
+  assert.match(await page.locator('#exchange-review').textContent(), /non supportat|bloccata/);
+  await page.locator('#import-dialog').getByRole('button', { name: 'Annulla', exact: true }).click();
+  assert.equal(await downloadSession(page, 'exchange-' + label + '-unsupported-session'), originalSession);
+
+  await openExchangeReview(page, exchangeSource);
+  const review = page.locator('#exchange-review');
+  await review.getByLabel('Come inserire le operazioni', { exact: true }).selectOption('replace');
+  await review.getByLabel(/^Confermo data e ora come riportate nel CSV/).check();
+  await review.getByLabel(/^Confermo le quantità nette effettive del CSV/).check();
+  await review.getByLabel(/ALFA → BETA/).selectOption('neutral');
+  await review.getByLabel('Data dei lotti ricevuti nelle permute neutrali', { exact: true }).selectOption('historical');
+  await review.getByLabel('Natura documentata dei premi', { exact: true }).selectOption('per_row');
+  await review.getByLabel('Costo fiscale documentato dei token ricevuti, per le vendite future', { exact: true }).selectOption('manual');
+  await assertReviewBlocked(page, 'The manual reward-cost policy must block import until every documented cost is supplied.');
+  await review.locator('[data-source-line="5"]').click();
+  await review.getByLabel('Trattamento documentato di questo premio', { exact: true }).selectOption('holding_income');
+  await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).fill('7.00');
+  await review.getByRole('button', { name: 'Salva rettifica', exact: true }).click();
+  await assertReviewBlocked(page, 'Mixed EARN data must require the documented treatment and cost of the second reward too.');
+  await review.locator('[data-source-line="6"]').click();
+  await review.getByLabel('Trattamento documentato di questo premio', { exact: true }).selectOption('documented_acquisition');
+  await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).fill('3.00');
+  await review.getByRole('button', { name: 'Salva rettifica', exact: true }).click();
+  await page.waitForFunction(() => !document.getElementById('confirm-import').disabled);
+  await review.locator('[data-source-line="6"]').click();
+  await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).fill('999');
+  assert.equal(await page.locator('#confirm-import').isDisabled(), true, 'An unsaved correction must block applying previously reviewed values.');
+  await review.locator('[data-source-line="5"]').click();
+  assert.equal(await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).inputValue(), '999', 'Changing rows must preserve unsaved corrections until explicitly saved or cancelled.');
+  await review.getByRole('button', { name: 'Annulla rettifica', exact: true }).click();
+  await page.waitForFunction(() => !document.getElementById('confirm-import').disabled);
+  assert.equal(await review.locator('img').count(), 0, 'HTML-like source labels must remain text in the preview.');
+  assert.equal(await page.evaluate(() => window.__exchangeXss === true), false);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'The review must not make the application wider than a mobile viewport.');
+  await page.locator('#import-dialog').evaluate(dialog => { dialog.scrollTop = 0; });
+  await page.screenshot({ path: resolve(artifacts, 'exchange-' + label + '-wizard.png') });
+  const preview = review.locator('.exchange-review-preview');
+  await preview.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: resolve(artifacts, 'exchange-' + label + '-source-preview.png') });
+  await page.locator('#confirm-import').click();
+  await page.locator('#import-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#tax-year').selectOption('2025');
+  await page.locator('#asset-filter').fill('');
+  assert.equal(await page.locator('#ledger-content tbody tr').count(), 6, 'All six source rows must survive conversion.');
+  assert.match(await page.locator('#metric-net').textContent(), /86,67 €/);
+  assert.match(await page.locator('#metric-tax').textContent(), /22,53 €/);
+  assert.match(await page.locator('#metric-cost').textContent(), /81,67 €/,
+    'The residual basis must retain the original lot and the separately documented reward cost.');
+  await page.screenshot({ path: resolve(artifacts, 'exchange-' + label + '-result.png'), fullPage: true });
+  const exported = await downloadSession(page, 'exchange-' + label + '-canonical-v2');
+  const snapshot = parseCsv(exported);
+  assert.equal(snapshot.version, 2);
+  assert.deepEqual(snapshot.initialLots, initial.initialLots, 'Replacement of operations must preserve historical opening lots.');
+  assert.equal(snapshot.transactions.length, 6);
+  for (const source of exchangeSource) {
+    const converted = snapshot.transactions.find(row => row.id === source.id);
+    assert.ok(converted, 'Source id must remain recoverable: ' + source.id);
+    assert.deepEqual(converted.source.values, source, 'Every one of the 17 source fields must survive canonical export.');
+    assert.equal(converted.fees, '0', 'Included fees must not be applied twice.');
+  }
+  const swap = snapshot.transactions.find(row => row.id === 'exchange-swap');
+  assert.equal(swap.type, 'permuta_neutrale');
+  assert.equal(swap.lotDatePolicy, 'historical');
+  assert.equal(swap.source.decisions.swapTaxTreatment, 'neutral');
+  const reward = snapshot.transactions.find(row => row.id === 'exchange-reward');
+  assert.equal(reward.type, 'provento');
+  assert.equal(reward.totalEur, '20.00');
+  assert.equal(reward.rewardCostEur, '7.00');
+  assert.equal(reward.quantity, '0.500000000000000001');
+  assert.equal(reward.source.decisions.rewardCostPolicy, 'manual');
+  assert.equal(reward.source.decisions.amountsPolicy, 'manual');
+  const cashback = snapshot.transactions.find(row => row.id === 'exchange-cashback');
+  assert.equal(cashback.type, 'acquisto');
+  assert.equal(cashback.totalEur, '3.00');
+  assert.equal(cashback.source.values.received_value_EUR, '9.00');
+  assert.equal(cashback.source.decisions.rewardTreatment, 'documented_acquisition');
+  assert.equal(Object.hasOwn(cashback, 'rewardCostEur'), false);
+  await importDataset(page, snapshot, '', 6, { lineEnding: '\r' });
+  await page.locator('#tax-year').selectOption('2025');
+  assert.equal(await downloadSession(page, 'exchange-' + label + '-canonical-reimported'), exported,
+    'Canonical v2 with CR-only record endings must be recognized correctly and preserve all raw data, classifications and documented reward costs.');
+  assert.match(await page.locator('#metric-tax').textContent(), /22,53 €/);
+  results.push({ name: 'exchange-csv-' + label, operations: 6, format: '17 source columns → canonical v2',
+    incompleteReviewBlocked: true, unsupportedTypeBlocked: true, manualRewardCostRequired: true, sourceRoundTripVerified: true });
+  console.log(`PASS exchange-csv-${label}: explicit review, neutral swap, mixed EARN classifications and canonical v2 round trip.`);
+}
+
+
+async function captureFailureDiagnostics(failure) {
+  const report = {
+    failure: { name: failure.name, message: failure.message, stack: failure.stack },
+    browser: browser?.version(), elapsedSeconds: (Date.now() - started) / 1000,
+    cases: results, importClickAttempts, viewportCheckpoints, nativeConfirmActivations, javascriptErrors: errors, externalRequests, pages: []
+  };
+  let sequence = 0;
+  for (const context of contexts) {
+    for (const openPage of context.pages()) {
+      const index = ++sequence;
+      const entry = { index, url: openPage.url(), screenshots: [] };
+      report.pages.push(entry);
+      if (openPage.isClosed()) { entry.closed = true; continue; }
+      try {
+        entry.dom = await openPage.evaluate(() => {
+          const rectangle = rect => rect ? Object.fromEntries(['x', 'y', 'top', 'right', 'bottom', 'left', 'width', 'height'].map(key => [key, rect[key]])) : null;
+          const describe = element => {
+            if (!element) return null;
+            const style = getComputedStyle(element);
+            return {
+              tag: element.tagName, id: element.id, className: String(element.className || ''),
+              hidden: element.hidden, disabled: element.disabled ?? null,
+              open: element instanceof HTMLDialogElement ? element.open : null,
+              rect: rectangle(element.getBoundingClientRect()),
+              dimensions: { clientWidth: element.clientWidth, clientHeight: element.clientHeight,
+                scrollWidth: element.scrollWidth, scrollHeight: element.scrollHeight,
+                scrollLeft: element.scrollLeft, scrollTop: element.scrollTop,
+                offsetWidth: element.offsetWidth, offsetHeight: element.offsetHeight },
+              style: Object.fromEntries(['display', 'position', 'overflow', 'overflowX', 'overflowY', 'width', 'height',
+                'minWidth', 'maxWidth', 'minHeight', 'maxHeight', 'padding', 'margin', 'zIndex', 'pointerEvents', 'transform', 'contain']
+                .map(key => [key, style[key]])),
+              text: element.textContent?.trim().slice(0, 240)
+            };
+          };
+          const button = document.getElementById('confirm-import');
+          const dialog = document.getElementById('import-dialog');
+          const buttonRect = button?.getBoundingClientRect();
+          const dialogRect = dialog?.getBoundingClientRect();
+          const center = buttonRect ? { x: buttonRect.left + buttonRect.width / 2, y: buttonRect.top + buttonRect.height / 2 } : null;
+          const clippedCenter = buttonRect && dialogRect ? {
+            x: (Math.max(0, dialogRect.left, buttonRect.left) + Math.min(innerWidth, dialogRect.right, buttonRect.right)) / 2,
+            y: (Math.max(0, dialogRect.top, buttonRect.top) + Math.min(innerHeight, dialogRect.bottom, buttonRect.bottom)) / 2
+          } : null;
+          const hitTest = point => point ? {
+            point, first: describe(document.elementFromPoint(point.x, point.y)),
+            stack: document.elementsFromPoint(point.x, point.y).slice(0, 10).map(describe)
+          } : null;
+          const ancestors = [];
+          for (let element = button; element && ancestors.length < 8; element = element.parentElement) ancestors.push(describe(element));
+          return {
+            title: document.title, readyState: document.readyState, activeElement: describe(document.activeElement),
+            viewport: { innerWidth, innerHeight, scrollX, scrollY, devicePixelRatio,
+              visual: visualViewport ? { width: visualViewport.width, height: visualViewport.height,
+                offsetLeft: visualViewport.offsetLeft, offsetTop: visualViewport.offsetTop, pageLeft: visualViewport.pageLeft,
+                pageTop: visualViewport.pageTop, scale: visualViewport.scale } : null },
+            document: describe(document.documentElement), body: describe(document.body),
+            buttonAndAncestors: ancestors, centerHit: hitTest(center), clippedCenterHit: hitTest(clippedCenter),
+            dialogs: [...document.querySelectorAll('dialog')].map(describe),
+            importChildren: dialog ? [...dialog.children].map(describe) : [],
+            importElements: ['import-dialog', 'confirm-import', 'import-preview', 'import-error', 'exchange-review', 'template-button', 'drop-zone']
+              .map(id => describe(document.getElementById(id)))
+          };
+        });
+      } catch (diagnosticError) { entry.domError = diagnosticError.message; }
+      for (const [label, fullPage] of [['viewport', false], ['full', true]]) {
+        try {
+          const path = resolve(artifacts, `failure-page-${index}-${label}.png`);
+          await openPage.screenshot({ path, fullPage, timeout: 10000 });
+          entry.screenshots.push(path);
+        } catch (diagnosticError) { entry[label + 'ScreenshotError'] = diagnosticError.message; }
+      }
+    }
+  }
+  await writeFile(resolve(artifacts, 'failure-browser-state.json'), JSON.stringify(report, null, 2));
+  console.error('Browser failure diagnostics saved to ' + artifacts);
 }
 
 try {
@@ -239,9 +631,9 @@ try {
   await exportPdf(page, 'mixed-2026', 5, 2026, pdf => {
     assert.match(pdf.normalized, /anno 2026/);
     assert.match(pdf.normalized, /33%/);
-    assert.match(pdf.normalized, /6,60 €/);
+    assert.match(pdf.normalized, /8,25 €/);
     assert.match(pdf.normalized, /Plusvalenza\s+\+50,00 €/);
-    assert.match(pdf.normalized, /Plusvalenza\s+\+45,00 €/);
+    assert.equal(occurrences(pdf.normalized, 'Plusvalenza +50,00 €'), 2, 'Cash commissions must not reduce fiscal gains.');
     assert.match(pdf.normalized, /Minusvalenza\s+[-−]25,00 €/);
     assert.match(pdf.normalized, /Pareggio\s+0,00 €/);
     assert.match(pdf.normalized, /Nessun realizzo/);
@@ -254,7 +646,7 @@ try {
     assert.match(pdf.normalized, /anno 2025/);
     assert.match(pdf.normalized, /26%/);
     assert.match(pdf.normalized, /13,00 €/);
-    assert.doesNotMatch(pdf.normalized, /6,60 €/);
+    assert.doesNotMatch(pdf.normalized, /8,25 €/);
   });
 
   await importDataset(page, longHistory, 'ASSET249', 1);
@@ -287,6 +679,15 @@ try {
     assert.ok(raw.includes('329.999.999.999.999.999.999.999.999.999,71€'), 'The large tax total must be readable.');
     assert.ok(raw.includes(hugeAsset), 'The maximum-length asset name must not be truncated.');
   });
+  await verifyExchangeImport(page, 'mobile');
+  await verifyExchangeImport(desktop, 'desktop');
+  await exportPdf(desktop, 'exchange-csv-v2', 6, 2025, pdf => {
+    assert.match(pdf.normalized, /22,53 €/);
+    assert.match(pdf.normalized, /Permuta neutrale/);
+    assert.match(pdf.normalized, /Provento da detenzione/);
+    assert.match(pdf.normalized, /Nessun realizzo; costo storico trasferito/);
+    assert.match(pdf.normalized, /Provento imponibile 20,00 €/);
+  });
   assert.deepEqual(errors, [], 'The browser must not report JavaScript errors.');
   assert.deepEqual(externalRequests, [], 'PDF export must not send requests outside the local application.');
   for (const context of contexts) {
@@ -296,6 +697,10 @@ try {
   }
   await writeFile(resolve(artifacts, 'results.json'), JSON.stringify({ browser: browser.version(), mobileDevice: 'Pixel 7 emulation', elapsedSeconds: (Date.now() - started) / 1000, cases: results }, null, 2));
   console.log(`PDF browser checks completed; artifacts: ${artifacts}`);
+} catch (failure) {
+  try { await captureFailureDiagnostics(failure); }
+  catch (diagnosticError) { console.error('Unable to save browser failure diagnostics: ' + diagnosticError.message); }
+  throw failure;
 } finally {
   if (browser) await browser.close();
   if (server.exitCode === null) {

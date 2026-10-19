@@ -9,9 +9,9 @@ test('the documented CSV reconstructs the actual fiscal result and the same port
   const input = parseCsv(example);
   assert.deepEqual(validateDataset(input), []);
   const original = calculate(input, 2026);
-  assert.equal(original.rows[1].fiscalResult, '490');
+  assert.equal(original.rows[1].fiscalResult, '500');
   assert.equal(original.holdings[0].quantity, '0.25');
-  assert.equal(original.tax.tax, '161.70');
+  assert.equal(original.tax.tax, '165.00');
   const restored = parseImport(exportCsv(input), 'sessione.csv');
   assert.deepEqual(restored, input);
   assert.deepEqual(calculate(restored, 2026), original);
@@ -25,11 +25,11 @@ test('an annual loss and a previously declared residue survive CSV and offset th
     { id: 'vendita-2026', date: '2026-03-01', order: 1, type: 'vendita', asset: 'BTC', quantity: '1', unitPrice: '1500', fees: '10' },
   ], carryLosses: [{ id: 'residuo-2024', year: 2024, amount: '100' }] };
   const restored = parseCsv(exportCsv(input));
-  assert.equal(calculate(restored, 2025).tax.currentLoss, '210');
+  assert.equal(calculate(restored, 2025).tax.currentLoss, '200');
   const final = calculate(restored, 2026);
-  assert.equal(final.tax.lossesUsed, '310');
-  assert.equal(final.tax.taxable, '180');
-  assert.equal(final.tax.tax, '59.40');
+  assert.equal(final.tax.lossesUsed, '300');
+  assert.equal(final.tax.taxable, '200');
+  assert.equal(final.tax.tax, '66.00');
   assert.equal(final.holdings[0].quantity, '0');
   assert.deepEqual(final.tax.remainingLosses, []);
 });
@@ -49,14 +49,39 @@ test('the consultation report cannot be mistaken for the recoverable source CSV'
   assert.throws(() => parseCsv(report));
 });
 
+test('CSV round trips preserve fee expenses in management results while fiscal gains use gross amounts', () => {
+  const input = { version: 1, openingDate: '2025-01-01', initialLots: [], carryLosses: [], transactions: [
+    { id: 'buy', date: '2025-02-01', order: 1, type: 'acquisto', asset: 'BTC', quantity: '2', unitPrice: '100', fees: '3' },
+    { id: 'first-sale', date: '2025-02-02', order: 1, type: 'vendita', asset: 'BTC', quantity: '1', unitPrice: '150', fees: '2' },
+    { id: 'final-sale', date: '2025-02-03', order: 1, type: 'vendita', asset: 'BTC', quantity: '1', unitPrice: '200', fees: '4' },
+  ] };
+  const restored = parseImport(exportCsv(input), 'sessione.csv');
+  assert.deepEqual(restored, input);
+  const result = calculate(restored, 2025);
+  // Independent cash reconciliation after liquidation: EUR 350 gross receipts
+  // minus EUR 200 purchases = EUR 150 fiscal gain; EUR 9 expenses reduce the
+  // management profit to EUR 141. The two sales share the EUR 203 opening cost.
+  assert.equal(result.tax.gains, '150');
+  assert.equal(result.tax.tax, '39.00');
+  assert.equal(result.rows[1].managementResult, '46.5');
+  assert.equal(result.rows[2].managementResult, '94.5');
+  assert.equal(result.rows[1].managementProceeds, '148');
+  assert.equal(result.rows[2].managementProceeds, '196');
+  assert.equal(result.holdings[0].quantity, '0');
+  assert.equal(result.holdings[0].cost, '0');
+  assert.equal(result.holdings[0].fiscalCost, '0');
+  assert.deepEqual(calculate(parseCsv(exportCsv(restored)), 2025), result);
+});
+
 test('seeded multiasset CSV round trips preserve full-liquidation results at 18-decimal precision', () => {
   let seed = 782341;
   const random = maximum => {
     seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0;
     return seed % maximum;
   };
-  // Independent fixed-point accounting: quantities and fees are integer units
-  // of 10^-18; integer prices keep the expected cash flows exact in those units.
+  // Independent fixed-point accounting: quantities are integer units of 10^-18;
+  // integer prices keep gross fiscal cash flows exact in those units. Fees are
+  // generated and retained in the CSV, but are not deductible fiscal costs.
   const scale = 10n ** 18n;
   const fixed = units => {
     const absolute = units < 0n ? -units : units;
@@ -93,7 +118,7 @@ test('seeded multiasset CSV round trips preserve full-liquidation results at 18-
             id: `tx; "è"-${sample}-${year}-${order}`, asset, date: `${year}-01-15`, order, type,
             quantity: fixed(quantity), unitPrice: String(price), fees: fixed(fees),
           });
-          const cashFlow = type === 'acquisto' ? -quantity * price - fees : quantity * price - fees;
+          const cashFlow = type === 'acquisto' ? -quantity * price : quantity * price;
           expectedNet.set(year, expectedNet.get(year) + cashFlow);
           balance += type === 'acquisto' ? quantity : -quantity;
         };
@@ -115,7 +140,7 @@ test('seeded multiasset CSV round trips preserve full-liquidation results at 18-
       const calculated = calculate(restored, year);
       assert.deepEqual(calculated, calculate(input, year));
       // Liquidating every position makes the annual realized net independent
-      // of LIFO allocation: sale proceeds minus all acquisition costs and fees.
+      // of LIFO allocation: gross sale proceeds minus gross acquisition costs.
       assert.equal(calculated.tax.net, canonical(expectedNet.get(year)), `sample ${sample}, year ${year}`);
       assert.equal(calculated.holdings.length, assets.length);
       for (const holding of calculated.holdings) {

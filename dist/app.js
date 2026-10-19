@@ -3,6 +3,9 @@ import { calculate } from './engine.js';
 import { exportCsv, exportReportCsv, parseImport } from './csv.js';
 import { bindTransactionOrder } from './transaction-order.js';
 import { createImportSession } from './import-session.js';
+import { parseExchangeCsv } from './exchange-csv.js';
+import { convertExchangeCsv } from './exchange-import.js';
+import { createExchangeReview } from './exchange-review.js';
 import { buildPdfReportData } from './pdf-report.js';
 import { createPdfDownload } from './pdf-download.js';
 
@@ -14,10 +17,20 @@ let selectedYear = 2026;
 let view = 'transactions';
 let editing = null;
 const importSession = createImportSession((content, name) => {
+  if (String(content).split(/\r\n|\r|\n/, 1)[0].includes('datetime_tz_CET')) return { kind: 'exchange', source: parseExchangeCsv(content) };
   const imported = parseImport(content, name);
   calculate(imported, Math.max(selectedYear, Number(imported.openingDate.slice(0, 4))));
-  return imported;
+  exportCsv(imported);
+  return { kind: 'canonical', dataset: imported };
 });
+let reviewedDataset = null;
+let reviewTimer;
+const exchangeReview = createExchangeReview({ container: $('exchange-review'), onChange: () => {
+  reviewedDataset = null;
+  $('confirm-import').disabled = true;
+  clearTimeout(reviewTimer);
+  reviewTimer = setTimeout(reviewExchange, 120);
+} });
 let confirmationAction = null;
 let toastTimer;
 let result = calculate(dataset, selectedYear);
@@ -56,7 +69,7 @@ const signedMoney = value => value === null || value === undefined ? '—' : (De
 const numericClass = value => value && Decimal.from(value).cmp('0') < 0 ? 'negative' : value && Decimal.from(value).cmp('0') > 0 ? 'positive' : '';
 const id = prefix => prefix + '-' + crypto.randomUUID();
 const rowCount = () => dataset.initialLots.length + dataset.transactions.length + dataset.carryLosses.length;
-const errorText = error => error.errors ? error.errors.map(entry => friendlyLocation(entry.location) + ': ' + entry.message).slice(0, 5).join('\n') : error.message;
+const errorText = error => error.errors ? error.errors.map(entry => (entry.line ? 'Riga CSV ' + entry.line : friendlyLocation(entry.location || 'Dati')) + ': ' + entry.message).slice(0, 5).join('\n') : error.message;
 function friendlyLocation(location) {
   return location.replace(/initialLots\[(\d+)\]/g, (_, index) => 'Lotto ' + (Number(index) + 1)).replace(/transactions\[(\d+)\]/g, (_, index) => 'Operazione ' + (Number(index) + 1)).replace(/carryLosses\[(\d+)\]/g, (_, index) => 'Minusvalenza ' + (Number(index) + 1)).replace('openingDate', 'Data iniziale');
 }
@@ -78,6 +91,8 @@ function confirm(title, description, action, button = 'Conferma') {
 function commit(next, message) {
   const nextYear = Math.max(selectedYear, Number(next.openingDate.slice(0, 4)));
   const computed = calculate(next, nextYear);
+  // A temporary session must remain exportable in the recoverable format.
+  exportCsv(next);
   pdfDownload.reset();
   dataset = next;
   selectedYear = nextYear;
@@ -91,9 +106,19 @@ function assetCell(asset) {
   const kind = icon === '₿' ? 'btc' : icon === '♦' ? 'eth' : '';
   return `<div class="asset-cell"><span class="coin-avatar ${kind}" aria-hidden="true">${escapeHtml(icon)}</span><span class="asset-name">${escapeHtml(asset)}</span></div>`;
 }
-function actionButtons(recordId, kind, details = false) {
+const typeLabel = type => ({ acquisto: 'Acquisto', vendita: 'Vendita', permuta_neutrale: 'Permuta neutrale', permuta_imponibile: 'Permuta imponibile', provento: 'Provento da detenzione', deposito_eur: 'Deposito EUR' })[type] || type;
+const documentedPrize = row => row.source?.decisions?.rewardTreatment === 'documented_acquisition' && !row.source.derived;
+const operationLabel = row => documentedPrize(row) ? 'Premio · costo documentato' : typeLabel(row.type);
+const fiscalLabel = row => documentedPrize(row) ? 'Altri obblighi fiscali da verificare' : row.fiscalKind === 'neutral' ? 'Costo storico trasferito' : row.fiscalKind === 'income' ? 'Imponibile alla percezione' : row.fiscalKind === 'fiat' ? 'Movimento informativo' : row.fiscalKind === 'capital_gain' ? 'Costo LIFO ' + money(row.costBasis) : 'Nessun realizzo';
+function transactionRow(row) {
+  const fiat = row.fiscalKind === 'fiat';
+  const balance = (before) => fiat ? '—' : quantity(row[before ? 'beforeQuantity' : 'afterQuantity']) + `<span class="subvalue">PM ${Decimal.from(row[before ? 'beforeQuantity' : 'afterQuantity']).cmp('0') ? money(row[before ? 'beforeAverage' : 'afterAverage']) : '—'}</span>` + (row.receivedAsset ? `<span class="subvalue">${escapeHtml(row.receivedAsset)}: ${quantity(row[before ? 'receivedBeforeQuantity' : 'receivedAfterQuantity'])} · PM ${Decimal.from(row[before ? 'receivedBeforeQuantity' : 'receivedAfterQuantity']).cmp('0') ? money(row[before ? 'receivedBeforeAverage' : 'receivedAfterAverage']) : '—'}</span>` : '');
+  const movement = `${quantity(row.quantity)} ${escapeHtml(row.asset)}` + (row.receivedAsset ? ` → ${quantity(row.receivedQuantity)} ${escapeHtml(row.receivedAsset)}` : row.totalEur !== undefined ? ` · ${money(row.totalEur)}` : ` × ${money(row.unitPrice)}`);
+  return `<tr><td>${dateLabel(row.date)}<span class="subvalue">Sequenza ${row.order}</span></td><td>${assetCell(row.asset)}${row.receivedAsset ? `<span class="subvalue">→ ${escapeHtml(row.receivedAsset)}</span>` : ''}</td><td><span class="operation-tag ${row.fiscalKind === 'capital_gain' ? 'sell' : ''}">${escapeHtml(operationLabel(row))}</span><span class="subvalue">${movement}</span></td><td class="numeric">${balance(true)}</td><td class="numeric">${balance(false)}</td><td class="numeric ${numericClass(row.fiscalResult)}">${signedMoney(row.fiscalResult)}<span class="subvalue">${fiscalLabel(row)}</span></td><td>${actionButtons(row.id, 'transactions', true, Boolean(row.source || row.totalEur !== undefined || !['acquisto', 'vendita'].includes(row.type)))}</td></tr>`;
+}
+function actionButtons(recordId, kind, details = false, readOnly = false) {
   const safeId = escapeHtml(recordId);
-  return `<div class="row-actions">${details ? `<button data-detail="${safeId}" title="Dettaglio del calcolo" aria-label="Dettaglio del calcolo">↗</button>` : ''}<button data-edit="${safeId}" data-kind="${kind}" title="Modifica" aria-label="Modifica">✎</button><button data-delete="${safeId}" data-kind="${kind}" title="Elimina" aria-label="Elimina">×</button></div>`;
+  return `<div class="row-actions">${details ? `<button data-detail="${safeId}" title="Dettaglio del calcolo" aria-label="Dettaglio del calcolo">↗</button>` : ''}${readOnly ? '' : `<button data-edit="${safeId}" data-kind="${kind}" title="Modifica" aria-label="Modifica">✎</button>`}<button data-delete="${safeId}" data-kind="${kind}" title="Elimina" aria-label="Elimina">×</button></div>`;
 }
 function emptyState(filtered = false) {
   const copy = labels[view];
@@ -112,6 +137,9 @@ function render() {
   $('metric-cost').textContent = money(result.holdings.reduce((total, holding) => total.add(holding.fiscalCost), Decimal.from('0')));
   $('summary-year').textContent = selectedYear;
   $('summary-gains').textContent = money(tax.gains);
+  $('summary-gains-label').textContent = Decimal.from(tax.income || '0').cmp('0') ? 'Plusvalenze e proventi' : 'Plusvalenze realizzate';
+  $('metric-net-caption').textContent = Decimal.from(tax.income || '0').cmp('0') ? 'Plusvalenze e proventi meno minusvalenze' : 'Plusvalenze meno minusvalenze';
+  $('summary-income').textContent = Decimal.from(tax.income || '0').cmp('0') ? 'Di cui proventi da detenzione: ' + money(tax.income) : '';
   $('summary-losses').textContent = '− ' + money(tax.losses);
   $('summary-used').textContent = '− ' + money(tax.lossesUsed);
   $('summary-taxable').textContent = money(tax.taxable);
@@ -140,12 +168,12 @@ function renderLedger() {
   });
   const filter = $('asset-filter').value.trim().toUpperCase();
   const source = view === 'transactions' ? result.rows : view === 'holdings' ? result.holdings : view === 'lots' ? dataset.initialLots : dataset.carryLosses;
-  const records = view === 'losses' ? source : source.filter(record => !filter || record.asset.includes(filter));
+  const records = view === 'losses' ? source : source.filter(record => !filter || record.asset.includes(filter) || record.receivedAsset?.includes(filter));
   $('record-count').textContent = source.length;
   let html = '';
   if (!records.length) html = emptyState(Boolean(source.length && filter));
   else if (view === 'transactions') {
-    html = `<div class="table-scroll"><table><thead><tr><th>DATA / ORDINE</th><th>CRYPTO</th><th>OPERAZIONE</th><th class="numeric">PRIMA</th><th class="numeric">DOPO</th><th class="numeric">RISULTATO FISCALE</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${records.map(row => `<tr><td>${dateLabel(row.date)}<span class="subvalue">Sequenza ${row.order}</span></td><td>${assetCell(row.asset)}</td><td><span class="operation-tag ${row.type === 'vendita' ? 'sell' : ''}">${row.type === 'vendita' ? 'Vendita' : 'Acquisto'}</span><span class="subvalue" title="Prezzo unitario">${quantity(row.quantity)} × ${money(row.unitPrice)}</span></td><td class="numeric">${quantity(row.beforeQuantity)}<span class="subvalue" title="Prezzo medio gestionale">PM ${Decimal.from(row.beforeQuantity).cmp('0') ? money(row.beforeAverage) : '—'}</span></td><td class="numeric">${quantity(row.afterQuantity)}<span class="subvalue" title="Prezzo medio gestionale">PM ${Decimal.from(row.afterQuantity).cmp('0') ? money(row.afterAverage) : '—'}</span></td><td class="numeric ${numericClass(row.fiscalResult)}">${signedMoney(row.fiscalResult)}<span class="subvalue">${row.type === 'vendita' ? 'Costo LIFO ' + money(row.costBasis) : 'Nessun realizzo'}</span></td><td>${actionButtons(row.id, 'transactions', true)}</td></tr>`).join('')}</tbody></table></div>`;
+    html = `<div class="table-scroll"><table><thead><tr><th>DATA / ORDINE</th><th>CRYPTO</th><th>OPERAZIONE</th><th class="numeric">PRIMA</th><th class="numeric">DOPO</th><th class="numeric">RISULTATO FISCALE</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${records.map(transactionRow).join('')}</tbody></table></div>`;
   } else if (view === 'holdings') {
     html = `<div class="table-scroll"><table><thead><tr><th>CRYPTO</th><th class="numeric">QUANTITÀ RESIDUA</th><th class="numeric">PREZZO MEDIO GESTIONALE</th><th class="numeric">COSTO FISCALE RESIDUO</th></tr></thead><tbody>${records.map(holding => `<tr><td>${assetCell(holding.asset)}</td><td class="numeric">${quantity(holding.quantity)}</td><td class="numeric">${Decimal.from(holding.quantity).cmp('0') ? money(holding.average) : '—'}<span class="subvalue">Costo gestionale ${money(holding.cost)}</span></td><td class="numeric">${money(holding.fiscalCost)}<span class="subvalue">Media lotti ${Decimal.from(holding.quantity).cmp('0') ? money(holding.fiscalAverage) : '—'}</span></td></tr>`).join('')}</tbody></table></div>`;
   } else if (view === 'lots') {
@@ -165,6 +193,11 @@ function field(name, label, value = '', options = {}) {
 function nextOrder(records) { return Math.max(0, ...records.map(record => record.order || 0)) + 1; }
 function openEntry(kind = 'transactions', recordId = null) {
   const record = recordId ? dataset[kind].find(item => item.id === recordId) : null;
+  if (kind === 'transactions' && record && (record.source || !['acquisto', 'vendita'].includes(record.type) || record.totalEur !== undefined)) {
+    showDetails(recordId);
+    notify('Operazione importata: per rettificare i dati fiscali ricarica il CSV originale e usa le rettifiche nell’anteprima.');
+    return;
+  }
   editing = { kind, id: recordId };
   $('entry-error').hidden = true;
   const today = new Date().toISOString().slice(0, 10);
@@ -179,7 +212,7 @@ function openEntry(kind = 'transactions', recordId = null) {
       + field('order', 'Sequenza nella giornata', record?.order ?? 1, { type: 'number', min: 0, step: 1, hint: 'Determina l’ordine tra operazioni della stessa data.' })
       + field('quantity', 'Quantità', record?.quantity || '', { decimal: true, hint: 'Puoi usare la virgola o il punto decimale.' })
       + field('unitPrice', 'Prezzo unitario (€)', record?.unitPrice || '', { decimal: true })
-      + field('fees', 'Commissioni (€)', record?.fees || '0', { decimal: true, full: true, hint: 'Commissioni pagate in euro. Le commissioni in crypto richiedono un trattamento dedicato.' });
+      + field('fees', 'Commissioni gestionali (€)', record?.fees || '0', { decimal: true, full: true, hint: 'Pagate in euro: incidono sul risultato gestionale, non sono dedotte dal risultato fiscale. Prezzo e quantità devono essere lordi verificati.' });
   } else if (kind === 'initialLots') {
     $('entry-title').textContent = record ? 'Modifica lotto iniziale' : 'Nuovo lotto iniziale';
     $('entry-description').textContent = 'Inserisci un lotto ancora disponibile al ' + dateLabel(dataset.openingDate) + '. Per un LIFO corretto conserva le date e i costi originari dei lotti.';
@@ -187,7 +220,7 @@ function openEntry(kind = 'transactions', recordId = null) {
       + field('acquiredOn', 'Data originaria di acquisto', record?.acquiredOn || dataset.openingDate, { type: 'date', max: dataset.openingDate })
       + field('order', 'Sequenza di acquisto', record?.order ?? nextOrder(dataset.initialLots), { type: 'number', min: 0, step: 1, hint: 'Ordina i lotti acquistati nella stessa giornata.' })
       + field('quantity', 'Quantità residua all’apertura', record?.quantity || '', { decimal: true })
-      + field('unitCost', 'Costo unitario riconosciuto (€)', record?.unitCost || '', { decimal: true, hint: 'Comprende le commissioni storiche attribuite al lotto.' });
+      + field('unitCost', 'Costo unitario fiscale documentato (€)', record?.unitCost || '', { decimal: true, hint: 'Escludi commissioni e oneri accessori. Verifica anche i lotti salvati con versioni precedenti del sito.' });
   } else if (kind === 'carryLosses') {
     const openingYear = Number(dataset.openingDate.slice(0, 4));
     $('entry-title').textContent = record ? 'Modifica residuo pregresso' : 'Minusvalenza pregressa';
@@ -246,9 +279,17 @@ function deleteRecord(kind, recordId) {
 function showDetails(recordId) {
   const row = result.rows.find(item => item.id === recordId);
   if (!row) return;
-  $('detail-title').textContent = (row.type === 'vendita' ? 'Vendita ' : 'Acquisto ') + row.asset;
+  $('detail-title').textContent = operationLabel(row) + ' ' + row.asset + (row.receivedAsset ? ' → ' + row.receivedAsset : '');
   const pair = (label, value) => `<div class="detail-pair"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`;
-  $('detail-content').innerHTML = `<p class="modal-description">${dateLabel(row.date)} · sequenza ${row.order} · ${quantity(row.quantity)} ${escapeHtml(row.asset)} a ${money(row.unitPrice)} per unità</p><div class="detail-grid"><section class="detail-block"><h3>Prima dell’operazione</h3>${pair('Quantità', quantity(row.beforeQuantity))}${pair('Prezzo medio gestionale', Decimal.from(row.beforeQuantity).cmp('0') ? money(row.beforeAverage) : '—')}${pair('Costo medio dei lotti fiscali', Decimal.from(row.beforeQuantity).cmp('0') ? money(row.fiscalBeforeAverage) : '—')}</section><section class="detail-block"><h3>Dopo l’operazione</h3>${pair('Quantità', quantity(row.afterQuantity))}${pair('Prezzo medio gestionale', Decimal.from(row.afterQuantity).cmp('0') ? money(row.afterAverage) : '—')}${pair('Costo medio dei lotti fiscali', Decimal.from(row.afterQuantity).cmp('0') ? money(row.fiscalAfterAverage) : '—')}</section></div><div class="detail-result">${pair('Commissioni in euro', money(row.fees))}${row.type === 'vendita' ? pair('Corrispettivo netto', money(row.proceeds)) + pair('Costo fiscale LIFO', money(row.costBasis)) + pair('Risultato gestionale (prezzo medio)', signedMoney(row.managementResult)) + pair('Plusvalenza / minusvalenza fiscale', signedMoney(row.fiscalResult)) : pair('Costo di acquisto incluse commissioni', money(row.costBasis)) + pair('Risultato fiscale', 'Nessun realizzo')}</div>${row.lotDetails.length ? `<h3 class="detail-table-caption">Lotti attribuiti alla vendita, dal più recente</h3><div class="table-scroll"><table class="detail-table"><thead><tr><th>ACQUISTO</th><th class="numeric">QUANTITÀ</th><th class="numeric">COSTO UNITARIO</th><th class="numeric">COSTO ATTRIBUITO</th></tr></thead><tbody>${row.lotDetails.map(lot => `<tr><td>${dateLabel(lot.acquiredOn)}<span class="subvalue">Sequenza ${lot.order}</span></td><td class="numeric">${quantity(lot.quantity)}</td><td class="numeric">${money(lot.unitCost)}</td><td class="numeric">${money(lot.cost)}</td></tr>`).join('')}</tbody></table></div>` : ''}<p class="small-note">I valori a video sono arrotondati per la lettura. Il motore conserva la precisione nei calcoli; l’imposta finale è arrotondata ai centesimi.</p>`;
+  const balances = (before) => pair('Quantità ' + row.asset, quantity(row[before ? 'beforeQuantity' : 'afterQuantity']))
+    + pair('Prezzo medio gestionale', money(row[before ? 'beforeAverage' : 'afterAverage']))
+    + pair('Costo medio dei lotti fiscali', money(row[before ? 'fiscalBeforeAverage' : 'fiscalAfterAverage']))
+    + (row.receivedAsset ? pair('Quantità ' + row.receivedAsset, quantity(row[before ? 'receivedBeforeQuantity' : 'receivedAfterQuantity'])) + pair('Prezzo medio gestionale ' + row.receivedAsset, money(row[before ? 'receivedBeforeAverage' : 'receivedAfterAverage'])) : '');
+  const source = row.source?.values;
+  const sourceHtml = source ? `<details><summary>Dati originali del CSV e scelte confermate</summary><p class="small-note">Per rettificare, ricarica il CSV della piattaforma. Gli importi originali sono conservati separatamente dai valori fiscali applicati.</p>${Object.entries(source).map(([key, value]) => pair(escapeHtml(key), value || '—')).join('')}${Object.entries(row.source.decisions || {}).map(([key, value]) => pair(escapeHtml(key), String(value))).join('')}</details>` : '';
+  const realized = row.fiscalKind === 'capital_gain';
+  const fiscalCostLabel = row.fiscalKind === 'neutral' ? 'Costo storico trasferito' : row.fiscalKind === 'income' ? 'Costo documentato dei token ricevuti' : 'Costo fiscale (commissioni escluse)';
+  $('detail-content').innerHTML = `<p class="modal-description">${dateLabel(row.date)} · sequenza ${row.order} · ${quantity(row.quantity)} ${escapeHtml(row.asset)}${row.receivedAsset ? ` → ${quantity(row.receivedQuantity)} ${escapeHtml(row.receivedAsset)}` : ''}</p>${row.fiscalKind === 'fiat' ? '<p>Deposito EUR informativo: non modifica le posizioni crypto né il risultato fiscale.</p>' : `<div class="detail-grid"><section class="detail-block"><h3>Prima dell’operazione</h3>${balances(true)}</section><section class="detail-block"><h3>Dopo l’operazione</h3>${balances(false)}</section></div>`}<div class="detail-result">${row.totalEur !== undefined ? pair('Controvalore fiscale totale', money(row.totalEur)) : ''}${realized ? pair('Corrispettivo fiscale lordo', money(row.proceeds)) : ''}${pair(fiscalCostLabel, money(row.fiscalKind === 'income' ? row.rewardCostEur : row.costBasis))}${pair('Commissioni aggiuntive gestionali in euro', money(row.fees))}${realized ? pair('Risultato gestionale (prezzo medio)', signedMoney(row.managementResult)) : ''}${pair('Risultato fiscale', signedMoney(row.fiscalResult) + ' · ' + fiscalLabel(row))}${row.lotDatePolicy ? pair('Data dei lotti ricevuti', row.lotDatePolicy === 'historical' ? 'Storica dei lotti ceduti' : 'Data dello scambio') : ''}</div>${row.lotDetails.length ? `<h3 class="detail-table-caption">Lotti attribuiti all’operazione, dal più recente</h3><div class="table-scroll"><table class="detail-table"><thead><tr><th>ACQUISTO</th><th class="numeric">QUANTITÀ</th><th class="numeric">COSTO UNITARIO</th><th class="numeric">COSTO ATTRIBUITO</th></tr></thead><tbody>${row.lotDetails.map(lot => `<tr><td>${dateLabel(lot.acquiredOn)}<span class="subvalue">Sequenza ${lot.order}</span></td><td class="numeric">${quantity(lot.quantity)}</td><td class="numeric">${money(lot.unitCost)}</td><td class="numeric">${money(lot.cost)}</td></tr>`).join('')}</tbody></table></div>` : ''}${sourceHtml}<p class="small-note">Le commissioni non sono dedotte fiscalmente. I valori a video sono arrotondati per la lettura; l’imposta finale è arrotondata ai centesimi.</p>`;
   showDialog('detail-dialog');
 }
 function download(content, filename) {
@@ -284,24 +325,53 @@ function openImport() {
   $('import-file').value = '';
   resetImport();
   showDialog('import-dialog');
+  $('import-dialog').scrollTop = 0;
 }
 function resetImport() {
+  clearTimeout(reviewTimer);
+  reviewedDataset = null;
+  exchangeReview.hide();
   importSession.reset();
   $('import-preview').hidden = true;
   $('import-error').hidden = true;
   $('confirm-import').disabled = true;
+}
+function reviewExchange() {
+  reviewedDataset = null;
+  $('confirm-import').disabled = true;
+  const selection = importSession.pending;
+  if (selection?.kind !== 'exchange' || !exchangeReview.active) return;
+  try {
+    const converted = convertExchangeCsv(selection.source, dataset, exchangeReview.getOptions());
+    calculate(converted.dataset, Math.max(selectedYear, Number(converted.dataset.openingDate.slice(0, 4))));
+    exportCsv(converted.dataset);
+    reviewedDataset = converted.dataset;
+    exchangeReview.setErrors([]);
+    $('import-preview').textContent = `Pronto: ${converted.dataset.transactions.length} operazioni totali. I lotti iniziali e le minusvalenze della sessione saranno conservati.`;
+    $('import-preview').hidden = false;
+    $('confirm-import').disabled = false;
+  } catch (error) {
+    $('import-preview').hidden = true;
+    const errors = error.errors?.map(entry => ({ ...entry, message: (entry.location ? friendlyLocation(entry.location) + ': ' : '') + entry.message })) || [error.message];
+    exchangeReview.setErrors(errors);
+  }
 }
 async function readFile(file) {
   resetImport();
   try {
     const selection = await importSession.read(file);
     if (!selection) return;
-    const imported = selection.dataset;
+    if (selection.dataset.kind === 'exchange') {
+      exchangeReview.show(selection.dataset.source, dataset);
+      reviewExchange();
+      return;
+    }
+    const imported = selection.dataset.dataset;
     $('import-preview').textContent = '';
     const heading = document.createElement('strong');
     heading.textContent = 'File valido: ' + selection.name;
     const details = document.createElement('div');
-    details.textContent = `${imported.initialLots.length} lotti iniziali · ${imported.transactions.length} operazioni · ${imported.carryLosses.length} minusvalenze pregresse. Situazione iniziale: ${dateLabel(imported.openingDate)}.`;
+    details.textContent = `${imported.initialLots.length} lotti iniziali · ${imported.transactions.length} operazioni · ${imported.carryLosses.length} minusvalenze pregresse. Situazione iniziale: ${dateLabel(imported.openingDate)}. Verifica i costi dei vecchi file: le commissioni non sono deducibili fiscalmente.`;
     $('import-preview').append(heading, details);
     $('import-preview').hidden = false;
     $('confirm-import').disabled = false;
@@ -326,7 +396,18 @@ $('template-button').addEventListener('click', () => download(exportCsv(exampleD
 $('import-button').addEventListener('click', openImport);
 $('import-dialog').addEventListener('close', resetImport);
 $('import-file').addEventListener('change', event => { if (event.target.files[0]) readFile(event.target.files[0]); else resetImport(); });
-$('confirm-import').addEventListener('click', () => { if (!importSession.pending) return; try { commit(importSession.pending, 'Sessione importata. Tutti i risultati sono stati ricalcolati.'); resetImport(); $('import-dialog').close(); } catch (error) { $('import-error').textContent = errorText(error); $('import-error').hidden = false; } });
+$('confirm-import').addEventListener('click', () => {
+  const pending = importSession.pending;
+  if (!pending) return;
+  try {
+    if (pending.kind === 'exchange') reviewExchange();
+    const next = pending.kind === 'exchange' ? reviewedDataset : pending.dataset;
+    if (!next) return;
+    commit(next, 'Sessione importata. Tutti i risultati sono stati ricalcolati.');
+    resetImport();
+    $('import-dialog').close();
+  } catch (error) { $('import-error').textContent = errorText(error); $('import-error').hidden = false; }
+});
 ['dragover', 'dragenter'].forEach(eventName => $('drop-zone').addEventListener(eventName, event => { event.preventDefault(); $('drop-zone').classList.add('dragover'); }));
 ['dragleave', 'drop'].forEach(eventName => $('drop-zone').addEventListener(eventName, event => { event.preventDefault(); $('drop-zone').classList.remove('dragover'); if (eventName === 'drop' && event.dataTransfer.files[0]) readFile(event.dataTransfer.files[0]); }));
 $('ledger-content').addEventListener('click', event => {
