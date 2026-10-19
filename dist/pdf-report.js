@@ -19,7 +19,11 @@ const money = value => formatDecimal(value) + ' €';
 const quantity = value => formatDecimal(value, 18, true);
 const pair = (label, value) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`;
 
+const documentedReward = row => row.type === 'acquisto' && !row.source?.derived
+  && row.source?.decisions?.rewardTreatment === 'documented_acquisition';
+
 function fiscalLabel(row) {
+  if (documentedReward(row)) return 'Ingresso; altri obblighi da verificare';
   if (row.type === 'acquisto') return 'Nessun realizzo';
   if (row.type === 'permuta_neutrale') return 'Nessun realizzo; costo storico trasferito';
   if (row.type === 'deposito_eur') return 'Informativo, nessun reddito';
@@ -43,14 +47,39 @@ const OPERATION_LABELS = Object.freeze({
   permuta_imponibile: 'Permuta imponibile', provento: 'Provento da detenzione', deposito_eur: 'Deposito EUR',
 });
 
+// Source amounts are archived text and may exceed the engine input precision.
+// Keep every original digit without parsing arbitrarily long values as BigInt.
+const sourceAmount = value => typeof value === 'string' && /^\d+(?:\.\d+)?$/.test(value)
+  ? value.replace('.', ',') : null;
+
+function feeLabel(row) {
+  if (row.source?.derived && row.source?.decisions?.feePolicy === 'separate_taxable_disposal') return '—';
+  const original = row.source?.values;
+  const amount = sourceAmount(original?.fee_amount);
+  if (amount !== null && /[1-9]/.test(original.fee_amount)) {
+    const eur = sourceAmount(original.fee_value_EUR);
+    const policy = row.source?.decisions?.feePolicy;
+    const treatment = policy === 'already_included' ? 'già compresa'
+      : policy === 'separate_taxable_disposal' ? 'cessione separata' : 'dal file';
+    return `${amount} ${String(original.fee_currency ?? '')}${eur === null ? '' : ` (${eur} €)`} · ${treatment}`;
+  }
+  return money(row.fees);
+}
+
+function operationLabel(row) {
+  if (row.source?.derived && row.source?.decisions?.feePolicy === 'separate_taxable_disposal') return 'Cessione commissione';
+  if (documentedReward(row)) return 'Premio: costo documentato';
+  return OPERATION_LABELS[row.type] ?? String(row.type);
+}
+
 function operationValues(row) {
   const exchange = row.type === 'permuta_neutrale' || row.type === 'permuta_imponibile';
   return [
     `${dateLabel(row.date)}\nSequenza ${row.order}`,
     exchange ? `${row.asset} / ${row.receivedAsset}` : String(row.asset),
-    OPERATION_LABELS[row.type] ?? String(row.type),
+    operationLabel(row),
     exchange ? `Ceduta: ${quantity(row.quantity)} ${row.asset}\nRicevuta: ${quantity(row.receivedQuantity)} ${row.receivedAsset}` : quantity(row.quantity),
-    money(row.fees),
+    feeLabel(row),
     row.proceeds === null || row.proceeds === undefined ? '—' : money(row.display?.proceeds ?? row.proceeds),
     row.type === 'deposito_eur' ? '—' : money(row.display?.costBasis ?? row.costBasis),
     fiscalLabel(row)
@@ -98,13 +127,15 @@ export function buildPdfReportData(result, openingDate) {
     ],
     summary,
     warnings: result.warnings.map(String),
-    columns: ['Data / sequenza', 'Crypto', 'Tipo', 'Quantità', 'Commissioni (€)', 'Corrispettivo / provento lordo (€)', 'Costo fiscale / trasferito (€)', 'Risultato fiscale (€)'],
+    columns: ['Data / sequenza', 'Crypto', 'Tipo', 'Quantità', 'Commissioni', 'Corrispettivo / provento lordo (€)', 'Costo fiscale / trasferito (€)', 'Risultato fiscale (€)'],
     rows: rows.map(operationValues),
     notes: [
-      'Gli acquisti non realizzano plusvalenze o minusvalenze. Per vendite e permute imponibili il risultato fiscale è il corrispettivo lordo o il valore normale ricevuto meno il costo fiscale attribuito con il metodo LIFO. Le commissioni incidono sulla gestione del portafoglio, ma non aumentano il costo fiscale e non riducono il corrispettivo fiscale.',
+      'Gli acquisti non realizzano plusvalenze o minusvalenze. Per vendite e permute imponibili il risultato fiscale è il corrispettivo lordo o il valore normale ricevuto meno il costo fiscale attribuito con il metodo LIFO. Le commissioni manuali incidono solo sui risultati gestionali, ma non aumentano il costo fiscale e non riducono il corrispettivo fiscale.',
+      'Per le commissioni importate sono riportati quantità, valuta e controvalore EUR originali. “Già compresa” indica che la commissione è già inclusa negli importi confermati e non va applicata nuovamente. Una “cessione separata” compare in una propria operazione e non si somma ai costi dell’operazione principale.',
       'Sono neutrali soltanto le permute tra cripto-attività con eguali caratteristiche e funzioni, secondo la classificazione confermata: non realizzano reddito e trasferiscono il costo storico ai lotti ricevuti. I depositi EUR sono informativi e non generano reddito.',
       'I proventi da detenzione sono imponibili al lordo alla ricezione. Per i proventi, la colonna del costo fiscale indica il costo documentato da usare per una cessione successiva: non è una deduzione dal reddito ricevuto e non viene assunto automaticamente pari a zero.',
-      'Gli importi sono arrotondati ai centesimi per la lettura. I totali fiscali sono calcolati con la precisione del motore: possono differire dalla somma degli importi arrotondati delle singole operazioni.'
+      'I premi classificati come acquisti documentati usano il costo confermato. L’assenza di realizzo nel motore non certifica l’esenzione del premio: gli altri obblighi devono essere verificati.',
+      'Gli importi fiscali sono arrotondati ai centesimi per la lettura; le commissioni originali del file conservano tutte le cifre. I totali fiscali sono calcolati con la precisione del motore: possono differire dalla somma degli importi arrotondati delle singole operazioni.'
     ],
     lossSections: lossSections(tax),
     recoveryNote: 'Questo PDF è un riepilogo e non può essere importato per riprendere la sessione. Usa “Esporta dati” per salvare il CSV ricaricabile. Il sito non registra i dati della sessione.',

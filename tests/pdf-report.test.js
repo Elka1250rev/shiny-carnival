@@ -414,3 +414,67 @@ test('received asset names are escaped in both exchange cells without changing t
   assert.equal((html.match(/&lt;svg onload=&quot;bad\(\)&quot;&gt;&amp;/g) ?? []).length, 2);
   assert.doesNotMatch(html, /<svg/);
 });
+
+test('imported commissions preserve original unit, currency and every EUR digit without changing calculated costs', () => {
+  const input = dataset({ version: 2, transactions: [buy('included', {
+    source: { line: 2, values: {
+      fee_amount: '0.0010000000000000000000001', fee_currency: 'BNB', fee_value_EUR: '0.1234567890123456789012300',
+    }, decisions: { feePolicy: 'already_included' } },
+  })] });
+  const result = calculate(input, 2025);
+  const snapshot = structuredClone(result);
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.equal(data.columns[4], 'Commissioni');
+  assert.equal(data.rows[0][4], '0,0010000000000000000000001 BNB (0,1234567890123456789012300 €) · già compresa');
+  assert.equal(data.rows[0][6], '100,00 €');
+  assert.equal(result.rows[0].fees, '0');
+  assert.deepEqual(result, snapshot);
+  assert.match(data.notes.join(' '), /commissioni manuali incidono solo sui risultati gestionali/);
+  assert.match(data.notes.join(' '), /già inclusa negli importi confermati e non va applicata nuovamente/);
+});
+
+test('separate commission disposals are identified once and do not duplicate the original fee', () => {
+  const original = { line: 2, values: { fee_amount: '0.0100', fee_currency: 'BNB', fee_value_EUR: '3.000' }, decisions: { feePolicy: 'separate_taxable_disposal' } };
+  const input = dataset({ version: 2, initialLots: [lot('bnb', { asset: 'BNB', quantity: '0.01', unitCost: '100' })], transactions: [
+    buy('purchase', { source: original }),
+    sell('fee-disposal', { order: 2, asset: 'BNB', quantity: '0.01', unitPrice: '0', totalEur: '3', source: { ...structuredClone(original), derived: true } }),
+  ] });
+  const result = calculate(input, 2025);
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.equal(data.rows[0][4], '0,0100 BNB (3,000 €) · cessione separata');
+  assert.equal(data.rows[1][2], 'Cessione commissione');
+  assert.equal(data.rows[1][4], '—');
+  assert.equal(data.rows[1][5], '3,00 €');
+  assert.equal(data.rows[1][7], 'Plusvalenza +2,00 €');
+  assert.equal(data.rows.flat().filter(value => value.includes('0,0100 BNB')).length, 1);
+  assert.equal(result.tax.gains, '2');
+});
+
+test('archived commission amounts remain plain text even with much more precision than engine inputs', () => {
+  const huge = '1'.repeat(100_000);
+  const input = dataset({ version: 2, transactions: [buy('source-text', {
+    source: { line: 2, values: { fee_amount: huge, fee_currency: '<BNB & "fee">', fee_value_EUR: '0.000000000000000000000001' }, decisions: { feePolicy: 'already_included' } },
+  })] });
+  const result = calculate(input, 2025);
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.equal(data.rows[0][4], huge + ' <BNB & "fee"> (0,000000000000000000000001 €) · già compresa');
+  const html = buildPdfReport(result, input.openingDate);
+  assert.ok(html.includes(huge));
+  assert.match(html, /&lt;BNB &amp; &quot;fee&quot;&gt;/);
+  assert.doesNotMatch(html, /<BNB/);
+});
+
+test('documented promotional acquisitions identify the confirmed cost without certifying an exemption', () => {
+  const input = dataset({ version: 2, transactions: [buy('promotion', {
+    unitPrice: '0', totalEur: '42.12',
+    source: { line: 2, values: { fee_amount: '0', fee_currency: '', fee_value_EUR: '0' }, decisions: { rewardTreatment: 'documented_acquisition', feePolicy: 'not_applicable' } },
+  })] });
+  const result = calculate(input, 2025);
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.equal(data.rows[0][2], 'Premio: costo documentato');
+  assert.equal(data.rows[0][6], '42,12 €');
+  assert.equal(data.rows[0][7], 'Ingresso; altri obblighi da verificare');
+  assert.equal(result.tax.income, '0');
+  assert.equal(result.rows[0].type, 'acquisto');
+  assert.match(data.notes.join(' '), /non certifica l’esenzione del premio/);
+});
