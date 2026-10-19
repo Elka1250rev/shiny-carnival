@@ -70,6 +70,12 @@ Per perdite originate fino al 2024, il requisito storico dell'eccedenza di 2.000
 
 L'imponibile non negativo è moltiplicato per l'aliquota dell'anno. L'aritmetica interna è esatta; l'imposta finale è arrotondata ai centesimi, con metà centesimo verso l'alto. I totali EUR importati sono conservati direttamente, senza ricostruirli da prezzi unitari arrotondati.
 
+## Saldi aggregati con prezzo medio storico stimato
+
+L’importatore Excel offre, su scelta esplicita, una simulazione in cui CRIPTO/EURO è assunto come prezzo medio storico stimato del saldo iniziale. Non ricostruisce i singoli acquisti originari né introduce un criterio fiscale sostitutivo del LIFO documentato. Le date originarie restano non disponibili e lo stato stimato viene conservato nel CSV versione 2. Gli acquisti successivi all’apertura sono trattati come più recenti del saldo iniziale; per le porzioni provenienti dal saldo aggregato si usa il costo medio confermato. Costi, risultati e imposta restano indicativi finché non vengono ricostruiti i dati documentati.
+
+Il prezzo medio stimato è modificabile dalla Situazione iniziale e la modifica ricalcola le operazioni; la segnalazione di stima rimane nella pagina e nel PDF. Ottenuta la documentazione, l’utente può ricostruire i lotti con date e costi reali, evitando la coesistenza di un saldo aggregato stimato e altri lotti iniziali della stessa crypto.
+
 ## Esclusioni
 
 Restano esclusi gli anni diversi dal 2025–2026, regimi speciali EMT in euro, derivati, attività d'impresa, successioni, donazioni e rivalutazioni automatiche; la classificazione di prodotti DeFi complessi o NFT richiede un'analisi specifica. L'opzione di permuta imponibile non certifica che un asset sia nel perimetro dell'art. 67, lettera c-sexies). Non sono calcolati monitoraggio, quadri dichiarativi, imposta sul valore o sul possesso e bollo.

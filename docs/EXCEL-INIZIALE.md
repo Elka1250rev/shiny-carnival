@@ -22,7 +22,7 @@ La **Data della situazione** parte vuota. Il nome del file e le note del foglio 
 
 Esempio: saldi alla fine del **31 dicembre 2024** diventano disponibilità all'apertura del **1° gennaio 2025**. Il sito continua a calcolare soltanto il 2025 e il 2026; l'apertura risultante deve essere in questi anni. Non viene aggiunta una disciplina fiscale per il 2024.
 
-La data dei saldi non è la data originaria di acquisto. Quest'ultima va inserita per ogni lotto: nessun acquisto viene datato automaticamente al 31 dicembre o al giorno di apertura.
+La data dei saldi non è la data originaria di acquisto. Per i lotti documentati la data originaria va inserita; nella modalità a prezzo medio stimato rimane non disponibile. Nessun acquisto viene datato automaticamente al 31 dicembre o al giorno di apertura.
 
 ## Prezzo medio storico stimato e modifica successiva
 
