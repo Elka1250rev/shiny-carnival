@@ -2,6 +2,7 @@ import { analyzeExchangeCsv } from './exchange-import.js';
 import { Decimal } from './decimal.js';
 
 const PAGE_SIZE = 50;
+const UNSAVED_MESSAGE = 'Salva o annulla la rettifica aperta prima di continuare.';
 let reviewSequence = 0;
 const blankOptions = () => ({
   mode: '', dateConfirmed: false, grossValuesConfirmed: false,
@@ -245,6 +246,7 @@ export function createExchangeReview({ container, onChange = () => {} }) {
     actions.append(button('Annulla rettifica', () => {
       openEditorId = null;
       renderPreview();
+      changed();
       focusRowButton(row.line);
     }));
     editor.append(actions);
@@ -288,10 +290,11 @@ export function createExchangeReview({ container, onChange = () => {} }) {
       const actions = element('td');
       const expanded = openEditorId === values.id;
       const editButton = button('Rettifica dati fiscali', () => {
-        openEditorId = expanded ? null : values.id;
+        if (openEditorId !== null) { setErrors([UNSAVED_MESSAGE]); return; }
+        openEditorId = values.id;
         renderPreview();
-        if (openEditorId) preview.querySelector('.exchange-review-editor select, .exchange-review-editor input')?.focus();
-        else focusRowButton(row.line);
+        changed();
+        preview.querySelector('.exchange-review-editor select, .exchange-review-editor input')?.focus();
       }, 'button button-outline exchange-review-edit-button');
       editButton.dataset.sourceLine = String(row.line);
       editButton.setAttribute('aria-expanded', String(expanded));
@@ -314,6 +317,7 @@ export function createExchangeReview({ container, onChange = () => {} }) {
     preview.append(scroller);
     const pagination = element('div', 'exchange-review-pagination');
     function move(delta) {
+      if (openEditorId !== null) { setErrors([UNSAVED_MESSAGE]); return; }
       page += delta;
       openEditorId = null;
       renderPreview();
@@ -430,6 +434,7 @@ export function createExchangeReview({ container, onChange = () => {} }) {
     return analysis;
   }
   function getOptions() {
+    if (openEditorId !== null) throw new Error(UNSAVED_MESSAGE);
     const overrides = Object.fromEntries(Object.entries(options.overrides).map(([id, values]) => [id, { ...values }]));
     return {
       ...options, swapTreatments: { ...options.swapTreatments }, rewardTreatments: { ...options.rewardTreatments }, overrides,

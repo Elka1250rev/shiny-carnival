@@ -15,6 +15,7 @@ const address = 'http://127.0.0.1:18743';
 const started = Date.now();
 const errors = [];
 const results = [];
+const importClickAttempts = [];
 const compact = value => value.replace(/\s+/gu, ' ').trim();
 const withoutSpaces = value => value.replace(/\s+/gu, '');
 const occurrences = (value, needle) => value.split(needle).length - 1;
@@ -67,12 +68,38 @@ async function waitForServer() {
   throw new Error('Local server did not become ready within 10 seconds. ' + serverOutput);
 }
 
-async function importDataset(page, input, filter, filteredCount) {
+
+async function recordImportClickTarget(page, source) {
+  const state = await page.evaluate(() => {
+    const rect = element => element ? Object.fromEntries(['x', 'y', 'top', 'right', 'bottom', 'left', 'width', 'height']
+      .map(key => [key, element.getBoundingClientRect()[key]])) : null;
+    const describe = element => element ? {
+      tag: element.tagName, id: element.id, className: String(element.className || ''), rect: rect(element),
+      scrollTop: element.scrollTop, scrollLeft: element.scrollLeft,
+      clientWidth: element.clientWidth, clientHeight: element.clientHeight,
+      scrollWidth: element.scrollWidth, scrollHeight: element.scrollHeight
+    } : null;
+    const button = document.getElementById('confirm-import');
+    const box = rect(button);
+    const point = box ? { x: box.left + box.width / 2, y: box.top + box.height / 2 } : null;
+    return {
+      viewport: { innerWidth, innerHeight, scrollX, scrollY },
+      button: describe(button), dialog: describe(document.getElementById('import-dialog')),
+      footer: describe(button?.parentElement), point,
+      hit: point ? describe(document.elementFromPoint(point.x, point.y)) : null
+    };
+  });
+  importClickAttempts.push({ attempt: importClickAttempts.length + 1, source, url: page.url(), state });
+  await writeFile(resolve(artifacts, 'import-click-attempts.json'), JSON.stringify(importClickAttempts, null, 2));
+}
+
+async function importDataset(page, input, filter, filteredCount, { lineEnding = '\r\n' } = {}) {
   await page.emulateMedia({ media: 'screen' });
   await page.locator('#import-button').click();
-  await page.locator('#import-file').setInputFiles({ name: 'synthetic.csv', mimeType: 'text/csv', buffer: Buffer.from(exportCsv(input)) });
+  await page.locator('#import-file').setInputFiles({ name: 'synthetic.csv', mimeType: 'text/csv', buffer: Buffer.from(exportCsv(input).replaceAll('\r\n', lineEnding)) });
   await page.waitForFunction(() => !document.getElementById('confirm-import').disabled || !document.getElementById('import-error').hidden);
   assert.equal(await page.locator('#import-error').isVisible(), false, await page.locator('#import-error').textContent());
+  await recordImportClickTarget(page, { sourceTransactions: input.transactions.length, lineEnding: JSON.stringify(lineEnding) });
   await page.locator('#confirm-import').click();
   await page.locator('#import-dialog').waitFor({ state: 'hidden' });
   await page.locator('#tax-year').selectOption('2026');
@@ -306,6 +333,14 @@ async function verifyExchangeImport(page, label) {
   await review.getByLabel('Trattamento documentato di questo premio', { exact: true }).selectOption('documented_acquisition');
   await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).fill('3.00');
   await review.getByRole('button', { name: 'Salva rettifica', exact: true }).click();
+  await page.waitForFunction(() => !document.getElementById('confirm-import').disabled);
+  await review.locator('[data-source-line="6"]').click();
+  await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).fill('999');
+  assert.equal(await page.locator('#confirm-import').isDisabled(), true, 'An unsaved correction must block applying previously reviewed values.');
+  await review.locator('[data-source-line="5"]').click();
+  assert.equal(await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).inputValue(), '999', 'Changing rows must preserve unsaved corrections until explicitly saved or cancelled.');
+  await review.getByRole('button', { name: 'Annulla rettifica', exact: true }).click();
+  await page.waitForFunction(() => !document.getElementById('confirm-import').disabled);
   assert.equal(await review.locator('img').count(), 0, 'HTML-like source labels must remain text in the preview.');
   assert.equal(await page.evaluate(() => window.__exchangeXss === true), false);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'The review must not make the application wider than a mobile viewport.');
@@ -352,14 +387,92 @@ async function verifyExchangeImport(page, label) {
   assert.equal(cashback.source.values.received_value_EUR, '9.00');
   assert.equal(cashback.source.decisions.rewardTreatment, 'documented_acquisition');
   assert.equal(Object.hasOwn(cashback, 'rewardCostEur'), false);
-  await importDataset(page, snapshot, '', 6);
+  await importDataset(page, snapshot, '', 6, { lineEnding: '\r' });
   await page.locator('#tax-year').selectOption('2025');
   assert.equal(await downloadSession(page, 'exchange-' + label + '-canonical-reimported'), exported,
-    'Canonical v2 reimport must preserve all raw data, classifications and documented reward costs.');
+    'Canonical v2 with CR-only record endings must be recognized correctly and preserve all raw data, classifications and documented reward costs.');
   assert.match(await page.locator('#metric-tax').textContent(), /22,53 €/);
   results.push({ name: 'exchange-csv-' + label, operations: 6, format: '17 source columns → canonical v2',
     incompleteReviewBlocked: true, unsupportedTypeBlocked: true, manualRewardCostRequired: true, sourceRoundTripVerified: true });
   console.log(`PASS exchange-csv-${label}: explicit review, neutral swap, mixed EARN classifications and canonical v2 round trip.`);
+}
+
+
+async function captureFailureDiagnostics(failure) {
+  const report = {
+    failure: { name: failure.name, message: failure.message, stack: failure.stack },
+    browser: browser?.version(), elapsedSeconds: (Date.now() - started) / 1000,
+    cases: results, importClickAttempts, javascriptErrors: errors, externalRequests, pages: []
+  };
+  let sequence = 0;
+  for (const context of contexts) {
+    for (const openPage of context.pages()) {
+      const index = ++sequence;
+      const entry = { index, url: openPage.url(), screenshots: [] };
+      report.pages.push(entry);
+      if (openPage.isClosed()) { entry.closed = true; continue; }
+      try {
+        entry.dom = await openPage.evaluate(() => {
+          const rectangle = rect => rect ? Object.fromEntries(['x', 'y', 'top', 'right', 'bottom', 'left', 'width', 'height'].map(key => [key, rect[key]])) : null;
+          const describe = element => {
+            if (!element) return null;
+            const style = getComputedStyle(element);
+            return {
+              tag: element.tagName, id: element.id, className: String(element.className || ''),
+              hidden: element.hidden, disabled: element.disabled ?? null,
+              open: element instanceof HTMLDialogElement ? element.open : null,
+              rect: rectangle(element.getBoundingClientRect()),
+              dimensions: { clientWidth: element.clientWidth, clientHeight: element.clientHeight,
+                scrollWidth: element.scrollWidth, scrollHeight: element.scrollHeight,
+                scrollLeft: element.scrollLeft, scrollTop: element.scrollTop,
+                offsetWidth: element.offsetWidth, offsetHeight: element.offsetHeight },
+              style: Object.fromEntries(['display', 'position', 'overflow', 'overflowX', 'overflowY', 'width', 'height',
+                'minWidth', 'maxWidth', 'minHeight', 'maxHeight', 'padding', 'margin', 'zIndex', 'pointerEvents', 'transform', 'contain']
+                .map(key => [key, style[key]])),
+              text: element.textContent?.trim().slice(0, 240)
+            };
+          };
+          const button = document.getElementById('confirm-import');
+          const dialog = document.getElementById('import-dialog');
+          const buttonRect = button?.getBoundingClientRect();
+          const dialogRect = dialog?.getBoundingClientRect();
+          const center = buttonRect ? { x: buttonRect.left + buttonRect.width / 2, y: buttonRect.top + buttonRect.height / 2 } : null;
+          const clippedCenter = buttonRect && dialogRect ? {
+            x: (Math.max(0, dialogRect.left, buttonRect.left) + Math.min(innerWidth, dialogRect.right, buttonRect.right)) / 2,
+            y: (Math.max(0, dialogRect.top, buttonRect.top) + Math.min(innerHeight, dialogRect.bottom, buttonRect.bottom)) / 2
+          } : null;
+          const hitTest = point => point ? {
+            point, first: describe(document.elementFromPoint(point.x, point.y)),
+            stack: document.elementsFromPoint(point.x, point.y).slice(0, 10).map(describe)
+          } : null;
+          const ancestors = [];
+          for (let element = button; element && ancestors.length < 8; element = element.parentElement) ancestors.push(describe(element));
+          return {
+            title: document.title, readyState: document.readyState, activeElement: describe(document.activeElement),
+            viewport: { innerWidth, innerHeight, scrollX, scrollY, devicePixelRatio,
+              visual: visualViewport ? { width: visualViewport.width, height: visualViewport.height,
+                offsetLeft: visualViewport.offsetLeft, offsetTop: visualViewport.offsetTop, pageLeft: visualViewport.pageLeft,
+                pageTop: visualViewport.pageTop, scale: visualViewport.scale } : null },
+            document: describe(document.documentElement), body: describe(document.body),
+            buttonAndAncestors: ancestors, centerHit: hitTest(center), clippedCenterHit: hitTest(clippedCenter),
+            dialogs: [...document.querySelectorAll('dialog')].map(describe),
+            importChildren: dialog ? [...dialog.children].map(describe) : [],
+            importElements: ['import-dialog', 'confirm-import', 'import-preview', 'import-error', 'exchange-review', 'template-button', 'drop-zone']
+              .map(id => describe(document.getElementById(id)))
+          };
+        });
+      } catch (diagnosticError) { entry.domError = diagnosticError.message; }
+      for (const [label, fullPage] of [['viewport', false], ['full', true]]) {
+        try {
+          const path = resolve(artifacts, `failure-page-${index}-${label}.png`);
+          await openPage.screenshot({ path, fullPage, timeout: 10000 });
+          entry.screenshots.push(path);
+        } catch (diagnosticError) { entry[label + 'ScreenshotError'] = diagnosticError.message; }
+      }
+    }
+  }
+  await writeFile(resolve(artifacts, 'failure-browser-state.json'), JSON.stringify(report, null, 2));
+  console.error('Browser failure diagnostics saved to ' + artifacts);
 }
 
 try {
@@ -442,6 +555,10 @@ try {
   }
   await writeFile(resolve(artifacts, 'results.json'), JSON.stringify({ browser: browser.version(), mobileDevice: 'Pixel 7 emulation', elapsedSeconds: (Date.now() - started) / 1000, cases: results }, null, 2));
   console.log(`PDF browser checks completed; artifacts: ${artifacts}`);
+} catch (failure) {
+  try { await captureFailureDiagnostics(failure); }
+  catch (diagnosticError) { console.error('Unable to save browser failure diagnostics: ' + diagnosticError.message); }
+  throw failure;
 } finally {
   if (browser) await browser.close();
   if (server.exitCode === null) {

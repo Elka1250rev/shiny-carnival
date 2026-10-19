@@ -17,7 +17,7 @@ let selectedYear = 2026;
 let view = 'transactions';
 let editing = null;
 const importSession = createImportSession((content, name) => {
-  if (String(content).split(/\r?\n/, 1)[0].includes('datetime_tz_CET')) return { kind: 'exchange', source: parseExchangeCsv(content) };
+  if (String(content).split(/\r\n|\r|\n/, 1)[0].includes('datetime_tz_CET')) return { kind: 'exchange', source: parseExchangeCsv(content) };
   const imported = parseImport(content, name);
   calculate(imported, Math.max(selectedYear, Number(imported.openingDate.slice(0, 4))));
   exportCsv(imported);
@@ -323,6 +323,7 @@ function openImport() {
   $('import-file').value = '';
   resetImport();
   showDialog('import-dialog');
+  $('import-dialog').scrollTop = 0;
 }
 function resetImport() {
   clearTimeout(reviewTimer);
