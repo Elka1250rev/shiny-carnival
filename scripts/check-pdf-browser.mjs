@@ -16,6 +16,9 @@ const started = Date.now();
 const errors = [];
 const results = [];
 const importClickAttempts = [];
+const viewportCheckpoints = [];
+const nativeConfirmActivations = [];
+const previousViewportState = new WeakMap();
 const compact = value => value.replace(/\s+/gu, ' ').trim();
 const withoutSpaces = value => value.replace(/\s+/gu, '');
 const occurrences = (value, needle) => value.split(needle).length - 1;
@@ -69,6 +72,44 @@ async function waitForServer() {
 }
 
 
+
+async function checkpointViewport(page, label) {
+  if (page.isClosed()) return;
+  const viewport = page.viewportSize();
+  const state = await page.evaluate(() => ({
+    inner: { width: innerWidth, height: innerHeight }, outer: { width: outerWidth, height: outerHeight },
+    client: { width: document.documentElement.clientWidth, height: document.documentElement.clientHeight },
+    document: { width: document.documentElement.scrollWidth, height: document.documentElement.scrollHeight },
+    body: { clientWidth: document.body?.clientWidth, clientHeight: document.body?.clientHeight,
+      scrollWidth: document.body?.scrollWidth, scrollHeight: document.body?.scrollHeight },
+    scroll: { x: scrollX, y: scrollY }, devicePixelRatio,
+    visual: visualViewport ? { width: visualViewport.width, height: visualViewport.height,
+      offsetLeft: visualViewport.offsetLeft, offsetTop: visualViewport.offsetTop,
+      pageLeft: visualViewport.pageLeft, pageTop: visualViewport.pageTop, scale: visualViewport.scale } : null,
+    activeElement: { tag: document.activeElement?.tagName, id: document.activeElement?.id },
+    openDialog: [...document.querySelectorAll('dialog[open]')].map(dialog => ({ id: dialog.id,
+      scrollTop: dialog.scrollTop, scrollHeight: dialog.scrollHeight, clientHeight: dialog.clientHeight }))
+  }));
+  const drift = [];
+  if (viewport && Math.abs(state.inner.width - viewport.width) > 1) drift.push('innerWidth≠emulatedWidth');
+  if (Math.abs(state.inner.width - state.client.width) > 1) drift.push('innerWidth≠clientWidth');
+  if (state.visual && Math.abs(state.visual.offsetTop) > 1) drift.push('visualOffsetTop');
+  if (state.visual && Math.abs(state.visual.offsetLeft) > 1) drift.push('visualOffsetLeft');
+  if (state.visual && Math.abs(state.visual.scale - 1) > 0.01) drift.push('visualScale');
+  const signature = JSON.stringify({ drift, inner: state.inner, client: state.client, visual: state.visual ? {
+    width: state.visual.width, height: state.visual.height, offsetLeft: state.visual.offsetLeft,
+    offsetTop: state.visual.offsetTop, scale: state.visual.scale } : null });
+  const previous = previousViewportState.get(page);
+  if (signature !== previous?.signature && (drift.length || previous?.drift.length)) {
+    console.log('VIEWPORT ' + JSON.stringify({ label, drift, viewport, inner: state.inner, client: state.client,
+      scroll: state.scroll, visual: state.visual }));
+  }
+  previousViewportState.set(page, { signature, drift });
+  viewportCheckpoints.push({ sequence: viewportCheckpoints.length + 1, elapsedMs: Date.now() - started, label,
+    url: page.url(), viewport, drift, state });
+  await writeFile(resolve(artifacts, 'viewport-checkpoints.json'), JSON.stringify(viewportCheckpoints, null, 2));
+}
+
 async function recordImportClickTarget(page, source) {
   const state = await page.evaluate(() => {
     const rect = element => element ? Object.fromEntries(['x', 'y', 'top', 'right', 'bottom', 'left', 'width', 'height']
@@ -93,14 +134,85 @@ async function recordImportClickTarget(page, source) {
   await writeFile(resolve(artifacts, 'import-click-attempts.json'), JSON.stringify(importClickAttempts, null, 2));
 }
 
+
+async function activateCanonicalImport(page) {
+  const button = page.locator('#confirm-import');
+  const touch = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
+  if (!touch) { await button.click(); return; }
+  await button.scrollIntoViewIfNeeded();
+  await checkpointViewport(page, 'import:before-native-confirm-touch');
+  assert.equal(await button.isEnabled(), true, 'Native touch must target an enabled import confirmation.');
+  const target = await button.evaluate(element => {
+    const box = element.getBoundingClientRect();
+    const viewport = visualViewport;
+    if (!viewport) return { error: 'VisualViewport is required for this mobile coordinate experiment.' };
+    const left = Math.max(box.left, viewport.offsetLeft);
+    const right = Math.min(box.right, viewport.offsetLeft + viewport.width);
+    const top = Math.max(box.top, viewport.offsetTop);
+    const bottom = Math.min(box.bottom, viewport.offsetTop + viewport.height);
+    const layout = { x: (left + right) / 2, y: (top + bottom) / 2 };
+    const hit = document.elementFromPoint(layout.x, layout.y);
+    return {
+      scale: viewport.scale, intersection: { width: right - left, height: bottom - top }, layout,
+      visual: { offsetLeft: viewport.offsetLeft, offsetTop: viewport.offsetTop, width: viewport.width, height: viewport.height },
+      tap: { x: layout.x - viewport.offsetLeft, y: layout.y - viewport.offsetTop },
+      layoutHitMatches: hit === element || element.contains(hit),
+      layoutHit: hit ? { tag: hit.tagName, id: hit.id, className: String(hit.className || '') } : null
+    };
+  });
+  assert.equal(target.error, undefined);
+  assert.ok(Math.abs(target.scale - 1) < 0.000001, 'This native-touch experiment requires visualViewport.scale exactly 1.');
+  assert.ok(target.intersection.width > 0 && target.intersection.height > 0, 'The import confirmation must intersect the visual viewport.');
+  assert.equal(target.layoutHitMatches, true, 'The independent layout-coordinate hit test must target the import button.');
+  assert.ok(target.tap.x >= 0 && target.tap.y >= 0 && target.tap.x < target.visual.width && target.tap.y < target.visual.height,
+    'The native tap must fall inside the visual viewport.');
+  await page.evaluate(() => {
+    window.__nativeConfirmEvents = [];
+    const handler = event => {
+      const button = document.getElementById('confirm-import');
+      const hit = event.target;
+      window.__nativeConfirmEvents.push({ type: event.type, pointerType: event.pointerType || '', isTrusted: event.isTrusted,
+        target: hit ? { tag: hit.tagName, id: hit.id, className: String(hit.className || '') } : null,
+        matchesButton: hit === button || button.contains(hit), clientX: event.clientX, clientY: event.clientY });
+    };
+    document.addEventListener('pointerup', handler, true);
+    document.addEventListener('click', handler, true);
+    window.__cleanupNativeConfirmEvents = () => {
+      document.removeEventListener('pointerup', handler, true);
+      document.removeEventListener('click', handler, true);
+    };
+  });
+  let events;
+  try {
+    await page.touchscreen.tap(target.tap.x, target.tap.y);
+    await page.waitForFunction(() => window.__nativeConfirmEvents.some(event => event.type === 'click'), null, { timeout: 3000 });
+  } finally {
+    events = await page.evaluate(() => {
+      window.__cleanupNativeConfirmEvents?.();
+      return window.__nativeConfirmEvents;
+    });
+    nativeConfirmActivations.push({ sequence: nativeConfirmActivations.length + 1, url: page.url(), target, events });
+    await writeFile(resolve(artifacts, 'native-confirm-activations.json'), JSON.stringify(nativeConfirmActivations, null, 2));
+    await checkpointViewport(page, 'import:after-native-confirm-touch');
+  }
+  assert.ok(events.some(event => event.type === 'pointerup' && event.pointerType === 'touch' && event.isTrusted && event.matchesButton),
+    'The actual trusted touch pointer event must reach the import button.');
+  assert.ok(events.some(event => event.type === 'click' && event.isTrusted && event.matchesButton),
+    'The actual trusted click generated by the native tap must reach the import button.');
+}
+
 async function importDataset(page, input, filter, filteredCount, { lineEnding = '\r\n' } = {}) {
+  await checkpointViewport(page, 'import:before-emulateMedia-screen');
   await page.emulateMedia({ media: 'screen' });
+  await checkpointViewport(page, 'import:after-emulateMedia-screen');
+  await checkpointViewport(page, 'import:before-open-dialog');
   await page.locator('#import-button').click();
+  await checkpointViewport(page, 'import:after-open-dialog');
   await page.locator('#import-file').setInputFiles({ name: 'synthetic.csv', mimeType: 'text/csv', buffer: Buffer.from(exportCsv(input).replaceAll('\r\n', lineEnding)) });
   await page.waitForFunction(() => !document.getElementById('confirm-import').disabled || !document.getElementById('import-error').hidden);
   assert.equal(await page.locator('#import-error').isVisible(), false, await page.locator('#import-error').textContent());
   await recordImportClickTarget(page, { sourceTransactions: input.transactions.length, lineEnding: JSON.stringify(lineEnding) });
-  await page.locator('#confirm-import').click();
+  await activateCanonicalImport(page);
   await page.locator('#import-dialog').waitFor({ state: 'hidden' });
   await page.locator('#tax-year').selectOption('2026');
   await page.locator('#asset-filter').fill(filter);
@@ -124,12 +236,17 @@ async function downloadSession(page, filename) {
 }
 
 async function verifyGuide(page) {
+  await checkpointViewport(page, 'guide:before-session-before');
   const session = await downloadSession(page, 'guide-session-before');
+  await checkpointViewport(page, 'guide:after-session-before');
   const originalUrl = page.url();
+  await checkpointViewport(page, 'guide:main-before-open');
   const newTab = page.context().waitForEvent('page');
   await page.locator('#guide-link').click();
   const guide = await newTab;
   await guide.waitForLoadState('load');
+  await checkpointViewport(page, 'guide:main-after-open');
+  await checkpointViewport(guide, 'guide:new-tab-after-open');
   assert.match(guide.url(), /\/guida\.html$/);
   assert.match(await guide.locator('h1').textContent(), /Come funziona/);
   const content = await guide.locator('main').textContent();
@@ -137,11 +254,17 @@ async function verifyGuide(page) {
   assert.match(content, /10\.000/);
   assert.match(content, /CSV/);
   assert.equal(await guide.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'The guide must fit a mobile viewport.');
+  await checkpointViewport(page, 'guide:main-before-guide-screenshot');
   await guide.screenshot({ path: resolve(artifacts, 'guida-mobile.png'), fullPage: true });
+  await checkpointViewport(page, 'guide:main-after-guide-screenshot');
+  await checkpointViewport(guide, 'guide:new-tab-after-screenshot');
   assert.deepEqual(await guide.evaluate(() => window.__cspViolations), [], 'The guide must preserve the Content Security Policy.');
+  await checkpointViewport(page, 'guide:main-before-guide-close');
   await guide.close();
+  await checkpointViewport(page, 'guide:main-after-guide-close');
   assert.equal(page.url(), originalUrl, 'Opening the guide must keep the calculator tab open.');
   assert.equal(await downloadSession(page, 'guide-session-after'), session, 'Reading the guide must preserve the current session.');
+  await checkpointViewport(page, 'guide:after-session-after');
   console.log('PASS guida: mobile page opens separately and preserves the session.');
 }
 
@@ -176,13 +299,18 @@ function inspectPdf(path) {
 
 async function exportPdf(page, name, expectedRows, year, verify, { retry = false } = {}) {
   const originalTitle = await page.title();
+  await checkpointViewport(page, name + ':before-session-before');
   const sessionBefore = await downloadSession(page, name + '-session-before');
+  await checkpointViewport(page, name + ':after-session-before');
   const ledgerBefore = await page.locator('#ledger-content').innerHTML();
   const filterBefore = await page.locator('#asset-filter').inputValue();
   const expectedFilename = `criptoconti-operazioni-anno-${year}.pdf`;
+  await checkpointViewport(page, name + ':before-pdf-button');
   const pending = page.waitForEvent('download', { timeout: 20000 });
   await page.locator('#pdf-button').click();
+  await checkpointViewport(page, name + ':after-pdf-button');
   const download = await pending;
+  await checkpointViewport(page, name + ':after-pdf-download');
   assert.equal(await download.failure(), null, 'The generated PDF must be downloadable.');
   assert.equal(download.suggestedFilename(), expectedFilename, 'The download name must identify the selected tax year.');
   const path = resolve(artifacts, name + '.pdf');
@@ -200,13 +328,20 @@ async function exportPdf(page, name, expectedRows, year, verify, { retry = false
   const href = await page.locator('#pdf-download-link').getAttribute('href');
   assert.match(href, /^blob:/, 'The PDF link must refer to bytes generated locally.');
   assert.equal(await page.locator('#pdf-download-link').getAttribute('target'), '_blank');
+  await checkpointViewport(page, name + ':before-notice-scrollIntoView');
   await page.locator('#pdf-download-notice').scrollIntoViewIfNeeded();
+  await checkpointViewport(page, name + ':after-notice-scrollIntoView');
+  await checkpointViewport(page, name + ':before-screenshot');
   await page.screenshot({ path: resolve(artifacts, name + '-ui.png') });
+  await checkpointViewport(page, name + ':after-screenshot');
 
   if (retry) {
+    await checkpointViewport(page, name + ':before-retry-click');
     const repeated = page.waitForEvent('download');
     await page.locator('#pdf-download-link').click();
+    await checkpointViewport(page, name + ':after-retry-click');
     const retryDownload = await repeated;
+    await checkpointViewport(page, name + ':after-retry-download');
     assert.equal(await retryDownload.failure(), null);
     assert.equal(retryDownload.suggestedFilename(), expectedFilename);
     const retryPath = resolve(artifacts, name + '-retry.pdf');
@@ -215,7 +350,10 @@ async function exportPdf(page, name, expectedRows, year, verify, { retry = false
     assert.equal(await page.locator('#pdf-download-link').getAttribute('href'), href);
   }
 
-  assert.equal(await downloadSession(page, name + '-session-after'), sessionBefore, 'PDF export must preserve every field in the recoverable session.');
+  await checkpointViewport(page, name + ':before-session-after');
+  const sessionAfter = await downloadSession(page, name + '-session-after');
+  await checkpointViewport(page, name + ':after-session-after');
+  assert.equal(sessionAfter, sessionBefore, 'PDF export must preserve every field in the recoverable session.');
   const pdf = inspectPdf(path);
   assert.match(pdf.normalized, new RegExp(`Operazioni: ${expectedRows}\\.`), 'The PDF must include all operations despite the active screen filter.');
   await Promise.all([
@@ -250,6 +388,7 @@ async function newPage(options, label) {
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
   await page.goto(address, { waitUntil: 'networkidle', timeout: 15000 });
+  await checkpointViewport(page, label + ':initial-page');
   return page;
 }
 
@@ -402,7 +541,7 @@ async function captureFailureDiagnostics(failure) {
   const report = {
     failure: { name: failure.name, message: failure.message, stack: failure.stack },
     browser: browser?.version(), elapsedSeconds: (Date.now() - started) / 1000,
-    cases: results, importClickAttempts, javascriptErrors: errors, externalRequests, pages: []
+    cases: results, importClickAttempts, viewportCheckpoints, nativeConfirmActivations, javascriptErrors: errors, externalRequests, pages: []
   };
   let sequence = 0;
   for (const context of contexts) {
