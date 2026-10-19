@@ -1,3 +1,6 @@
+import { readCsvRecords } from './csv-reader.js';
+import { EXCHANGE_CSV_COLUMNS } from './exchange-csv.js';
+
 /**
  * Local, versioned interchange format. Every importer produces this same model;
  * fiscal and portfolio validation belongs to the calculation engine.
@@ -8,6 +11,17 @@ export const CSV_COLUMNS = Object.freeze([
   'anno_minusvalenza', 'importo_eur',
 ]);
 
+export const CSV_COLUMNS_V2 = Object.freeze([...CSV_COLUMNS, 'dati_estesi']);
+
+const TRANSACTION_TYPES = Object.freeze([
+  'acquisto', 'vendita', 'permuta_neutrale', 'permuta_imponibile', 'provento', 'deposito_eur',
+]);
+const EXTENDED_FIELDS = Object.freeze([
+  'totalEur', 'receivedAsset', 'receivedQuantity', 'lotDatePolicy', 'rewardCostEur', 'source',
+]);
+const BASE_TRANSACTION_FIELDS = Object.freeze([
+  'id', 'date', 'order', 'type', 'asset', 'quantity', 'unitPrice', 'fees',
+]);
 const MAX_BYTES = 5 * 1024 * 1024;
 const MAX_RECORDS = 5000;
 const DECIMAL = /^\d{1,30}(?:[.,]\d{1,18})?$/;
@@ -87,103 +101,118 @@ function integerField(value, name, line, year = false) {
   return parsed;
 }
 
-/** A strict CSV reader, including quoted delimiters and quoted newlines. */
-function readRecords(text) {
-  if (typeof text !== 'string') throw error(1, 'il contenuto CSV deve essere testo.');
-  if (new TextEncoder().encode(text).byteLength > MAX_BYTES) {
-    throw error(1, 'il file supera il limite di 5 MiB.');
-  }
-  const source = text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
-  const records = [];
-  let fields = [];
-  let value = '';
-  let state = 'plain';
-  let line = 1;
-  let recordLine = 1;
-  let touched = false;
-
-  function finishRecord() {
-    if (touched || fields.length || value.length) {
-      fields.push(value);
-      records.push({ fields, line: recordLine });
-      // The header and the one required configuration row are metadata.
-      if (records.length > MAX_RECORDS + 2) {
-        throw error(recordLine, 'il file supera il limite di 5000 record di dati.');
-      }
-    }
-    fields = [];
-    value = '';
-    state = 'plain';
-    touched = false;
-  }
-
-  for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    if (state === 'quoted') {
-      if (character === '"') {
-        if (source[index + 1] === '"') {
-          value += '"';
-          index += 1;
-        } else state = 'closed';
-      } else if (character === '\r' || character === '\n') {
-        value += character;
-        if (character === '\r' && source[index + 1] === '\n') {
-          value += '\n';
-          index += 1;
-        }
-        line += 1;
-      } else value += character;
-      continue;
-    }
-    if (character === ';') {
-      fields.push(value);
-      value = '';
-      state = 'plain';
-      touched = true;
-    } else if (character === '\r' || character === '\n') {
-      finishRecord();
-      if (character === '\r' && source[index + 1] === '\n') index += 1;
-      line += 1;
-      recordLine = line;
-    } else if (state === 'closed') {
-      throw error(line, 'carattere inatteso dopo la chiusura delle virgolette.');
-    } else if (character === '"') {
-      if (value.length) throw error(line, 'virgolette inattese in un campo non racchiuso tra virgolette.');
-      state = 'quoted';
-      touched = true;
-    } else {
-      value += character;
-      touched = true;
-    }
-  }
-  if (state === 'quoted') throw error(recordLine, 'campo con virgolette non chiuse.');
-  finishRecord();
-  return records;
-}
-
 function rejectUnused(row, allowed, line) {
-  for (const name of CSV_COLUMNS) {
+  for (const name of Object.keys(row)) {
     if (!allowed.includes(name) && row[name] !== '') {
       throw error(line, `il campo ${name} deve essere vuoto per il tipo ${row.tipo}.`);
     }
   }
 }
 
+function objectFields(value, allowed, name, line) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)
+      || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) {
+    throw error(line, `il campo ${name} deve essere un oggetto.`);
+  }
+  for (const key of Object.keys(value)) {
+    if (!allowed.includes(key)) throw error(line, `campo non riconosciuto in ${name}: ${key}.`);
+  }
+  return value;
+}
+
+function exactDecimal(value, name, line) {
+  if (typeof value !== 'string') throw error(line, `il campo ${name} deve essere una stringa decimale esatta.`);
+  return decimalField(value, name, line);
+}
+
+// Exact source schema is archived as data; these strings are never HTML.
+const SOURCE_DECISIONS = Object.freeze({
+  swapTaxTreatment: ['neutral', 'taxable', 'not_applicable'],
+  rewardTreatment: ['holding_income', 'documented_acquisition', 'not_applicable'],
+  rewardCostPolicy: ['zero_confirmed', 'received_value_confirmed', 'manual', 'not_applicable'],
+  amountsPolicy: ['as_reported_confirmed', 'manual'],
+  feePolicy: ['already_included', 'separate_taxable_disposal', 'not_applicable'],
+  lotDatePolicy: ['historical', 'exchange', 'not_applicable'],
+  grossValuesConfirmed: null,
+});
+
+function sourceField(value, line) {
+  objectFields(value, ['line', 'values', 'decisions', 'derived'], 'source', line);
+  if (!Number.isSafeInteger(value.line) || value.line < 1) {
+    throw error(line, 'il campo source.line deve essere un numero intero positivo.');
+  }
+  objectFields(value.values, EXCHANGE_CSV_COLUMNS, 'source.values', line);
+  if (EXCHANGE_CSV_COLUMNS.some(name => !Object.hasOwn(value.values, name) || typeof value.values[name] !== 'string')) {
+    throw error(line, 'il campo source.values deve contenere le 17 colonne originali come stringhe.');
+  }
+  const result = { line: value.line, values: Object.fromEntries(EXCHANGE_CSV_COLUMNS.map(name => [name, value.values[name]])) };
+  if (Object.hasOwn(value, 'decisions')) {
+    objectFields(value.decisions, Object.keys(SOURCE_DECISIONS), 'source.decisions', line);
+    const decisions = {};
+    for (const [name, decision] of Object.entries(value.decisions)) {
+      const allowed = SOURCE_DECISIONS[name];
+      if (allowed === null ? typeof decision !== 'boolean' : !allowed.includes(decision)) {
+        throw error(line, `il campo source.decisions.${name} contiene un valore non supportato.`);
+      }
+      decisions[name] = decision;
+    }
+    result.decisions = decisions;
+  }
+  if (Object.hasOwn(value, 'derived')) {
+    if (typeof value.derived !== 'boolean') throw error(line, 'il campo source.derived deve essere booleano.');
+    result.derived = value.derived;
+  }
+  return result;
+}
+
+function extendedFields(value, line) {
+  objectFields(value, EXTENDED_FIELDS, 'dati_estesi', line);
+  const result = {};
+  for (const name of ['totalEur', 'receivedQuantity', 'rewardCostEur']) {
+    if (Object.hasOwn(value, name)) result[name] = exactDecimal(value[name], name, line);
+  }
+  if (Object.hasOwn(value, 'receivedAsset')) result.receivedAsset = textField(value.receivedAsset, 'receivedAsset', line);
+  if (Object.hasOwn(value, 'lotDatePolicy')) {
+    if (!['historical', 'exchange'].includes(value.lotDatePolicy)) {
+      throw error(line, 'il campo lotDatePolicy deve essere historical o exchange.');
+    }
+    result.lotDatePolicy = value.lotDatePolicy;
+  }
+  if (Object.hasOwn(value, 'source')) result.source = sourceField(value.source, line);
+  return result;
+}
+
+function parseExtended(raw, line) {
+  if (raw === '') return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(raw, (key, value) => {
+      if (['__proto__', 'constructor', 'prototype'].includes(key)) throw new Error('chiave riservata');
+      return value;
+    });
+  } catch {
+    throw error(line, 'il campo dati_estesi deve contenere JSON valido, senza chiavi riservate.');
+  }
+  return extendedFields(parsed, line);
+}
+
 /** Parse the canonical format. Numeric amounts remain exact decimal strings. */
 export function parseCsv(text) {
-  const records = readRecords(text);
+  const records = readCsvRecords(text, { maxRecords: 5002 });
   if (!records.length) throw error(1, 'il file CSV è vuoto.');
   const header = records[0];
   const seen = new Set();
   for (const column of header.fields) {
     if (seen.has(column)) throw error(header.line, `colonna duplicata: ${column || '(vuota)'}.`);
     seen.add(column);
-    if (!CSV_COLUMNS.includes(column)) throw error(header.line, `colonna non riconosciuta: ${column || '(vuota)'}.`);
+    if (!CSV_COLUMNS_V2.includes(column)) throw error(header.line, `colonna non riconosciuta: ${column || '(vuota)'}.`);
   }
-  const missing = CSV_COLUMNS.filter(column => !seen.has(column));
+  const version = seen.has('dati_estesi') ? 2 : 1;
+  const columns = version === 2 ? CSV_COLUMNS_V2 : CSV_COLUMNS;
+  const missing = columns.filter(column => !seen.has(column));
   if (missing.length) throw error(header.line, `colonne mancanti: ${missing.join(', ')}.`);
 
-  const dataset = { version: 1, openingDate: '', initialLots: [], transactions: [], carryLosses: [] };
+  const dataset = { version, openingDate: '', initialLots: [], transactions: [], carryLosses: [] };
   let configurationFound = false;
   const initialDates = [];
   for (const record of records.slice(1)) {
@@ -192,7 +221,7 @@ export function parseCsv(text) {
       throw error(line, `numero di colonne errato: attese ${header.fields.length}, trovate ${fields.length}.`);
     }
     const row = Object.fromEntries(header.fields.map((column, index) => [column, fields[index]]));
-    if (row.versione !== '1') throw error(line, `versione CSV non supportata: ${row.versione || '(vuota)'}.`);
+    if (row.versione !== String(version)) throw error(line, `versione CSV non supportata: ${row.versione || '(vuota)'}.`);
     const common = ['versione', 'tipo'];
     if (row.tipo === 'configurazione') {
       rejectUnused(row, [...common, 'data'], line);
@@ -210,8 +239,8 @@ export function parseCsv(text) {
         quantity: decimalField(row.quantita, 'quantita', line),
         unitCost: decimalField(row.prezzo_unitario_eur, 'prezzo_unitario_eur', line),
       });
-    } else if (row.tipo === 'acquisto' || row.tipo === 'vendita') {
-      rejectUnused(row, [...common, 'id', 'data', 'ordine', 'cripto', 'quantita', 'prezzo_unitario_eur', 'commissioni_eur'], line);
+    } else if ((version === 2 ? TRANSACTION_TYPES : ['acquisto', 'vendita']).includes(row.tipo)) {
+      rejectUnused(row, [...common, 'id', 'data', 'ordine', 'cripto', 'quantita', 'prezzo_unitario_eur', 'commissioni_eur', ...(version === 2 ? ['dati_estesi'] : [])], line);
       dataset.transactions.push({
         id: textField(row.id, 'id', line),
         date: dateField(row.data, 'data', line),
@@ -221,6 +250,7 @@ export function parseCsv(text) {
         quantity: decimalField(row.quantita, 'quantita', line),
         unitPrice: decimalField(row.prezzo_unitario_eur, 'prezzo_unitario_eur', line),
         fees: decimalField(row.commissioni_eur, 'commissioni_eur', line),
+        ...(version === 2 ? parseExtended(row.dati_estesi, line) : {}),
       });
     } else if (row.tipo === 'minusvalenza_pregressa') {
       rejectUnused(row, [...common, 'id', 'anno_minusvalenza', 'importo_eur'], line);
@@ -253,44 +283,59 @@ function writeCsv(columns, rows) {
 
 /** Export inputs, opening settings and historical losses in a reloadable file. */
 export function exportCsv(dataset) {
-  if (!dataset || dataset.version !== 1) throw error(1, 'versione del dataset non supportata.');
+  if (!dataset || ![1, 2].includes(dataset.version)) throw error(1, 'versione del dataset non supportata.');
+  const version = dataset.version;
+  if (version === 2) objectFields(dataset, ['version', 'openingDate', 'initialLots', 'transactions', 'carryLosses'], 'dataset', 1);
   for (const name of ['initialLots', 'transactions', 'carryLosses']) {
     if (!Array.isArray(dataset[name])) throw error(1, `il campo ${name} deve essere un elenco.`);
   }
   const count = dataset.initialLots.length + dataset.transactions.length + dataset.carryLosses.length;
   if (count > MAX_RECORDS) throw error(1, 'il file supera il limite di 5000 record di dati.');
   const openingDate = dateField(dataset.openingDate, 'data', 2);
-  const rows = [['1', 'configurazione', '', openingDate, '', '', '', '', '', '', '', '']];
+  const rows = [[version, 'configurazione', '', openingDate, '', '', '', '', '', '', '', '', ...(version === 2 ? [''] : [])]];
   for (const lot of dataset.initialLots) {
     const line = rows.length + 2;
-    rows.push(['1', 'iniziale', textField(lot.id, 'id', line), openingDate,
+    if (version === 2) objectFields(lot, ['id', 'asset', 'acquiredOn', 'order', 'quantity', 'unitCost'], 'lotto iniziale', line);
+    rows.push([version, 'iniziale', textField(lot.id, 'id', line), openingDate,
       integerField(lot.order, 'ordine', line), textField(lot.asset, 'cripto', line),
       decimalField(lot.quantity, 'quantita', line), decimalField(lot.unitCost, 'prezzo_unitario_eur', line), '',
-      dateField(lot.acquiredOn, 'data_acquisto_originale', line), '', '']);
+      dateField(lot.acquiredOn, 'data_acquisto_originale', line), '', '', ...(version === 2 ? [''] : [])]);
   }
   for (const transaction of dataset.transactions) {
     const line = rows.length + 2;
-    if (transaction.type !== 'acquisto' && transaction.type !== 'vendita') {
-      throw error(line, 'il tipo di transazione deve essere acquisto o vendita.');
+    if (!(version === 2 ? TRANSACTION_TYPES : ['acquisto', 'vendita']).includes(transaction.type)) {
+      throw error(line, `il tipo di transazione non è supportato nella versione ${version}.`);
     }
-    rows.push(['1', transaction.type, textField(transaction.id, 'id', line), dateField(transaction.date, 'data', line),
+    let extra;
+    if (version === 2) {
+      objectFields(transaction, [...BASE_TRANSACTION_FIELDS, ...EXTENDED_FIELDS], 'transazione', line);
+      extra = extendedFields(Object.fromEntries(EXTENDED_FIELDS.filter(name => Object.hasOwn(transaction, name)).map(name => [name, transaction[name]])), line);
+    } else if (EXTENDED_FIELDS.some(name => Object.hasOwn(transaction, name))) {
+      throw error(line, 'i dati estesi richiedono la versione 2 del dataset.');
+    }
+    rows.push([version, transaction.type, textField(transaction.id, 'id', line), dateField(transaction.date, 'data', line),
       integerField(transaction.order, 'ordine', line), textField(transaction.asset, 'cripto', line),
       decimalField(transaction.quantity, 'quantita', line), decimalField(transaction.unitPrice, 'prezzo_unitario_eur', line),
-      decimalField(transaction.fees, 'commissioni_eur', line), '', '', '']);
+      decimalField(transaction.fees, 'commissioni_eur', line), '', '', '', ...(version === 2 ? [Object.keys(extra).length ? JSON.stringify(extra) : ''] : [])]);
   }
   for (const loss of dataset.carryLosses) {
     const line = rows.length + 2;
-    rows.push(['1', 'minusvalenza_pregressa', textField(loss.id, 'id', line), '', '', '', '', '', '', '',
-      integerField(loss.year, 'anno_minusvalenza', line, true), decimalField(loss.amount, 'importo_eur', line)]);
+    if (version === 2) objectFields(loss, ['id', 'year', 'amount'], 'minusvalenza pregressa', line);
+    rows.push([version, 'minusvalenza_pregressa', textField(loss.id, 'id', line), '', '', '', '', '', '', '',
+      integerField(loss.year, 'anno_minusvalenza', line, true), decimalField(loss.amount, 'importo_eur', line), ...(version === 2 ? [''] : [])]);
   }
-  return writeCsv(CSV_COLUMNS, rows);
+  return writeCsv(version === 2 ? CSV_COLUMNS_V2 : CSV_COLUMNS, rows);
 }
 
 const REPORT_COLUMNS = [
   'id', 'data', 'ordine', 'operazione', 'cripto', 'quantita', 'prezzo_unitario_eur', 'commissioni_eur',
   'quantita_prima', 'prezzo_medio_prima_eur', 'quantita_dopo', 'prezzo_medio_dopo_eur',
-  'prezzo_medio_fiscale_prima_eur', 'prezzo_medio_fiscale_dopo_eur', 'ricavo_netto_eur',
+  'prezzo_medio_fiscale_prima_eur', 'prezzo_medio_fiscale_dopo_eur', 'corrispettivo_lordo_eur',
   'costo_fiscale_eur', 'risultato_fiscale_eur', 'risultato_gestionale_eur', 'dettaglio_lotti',
+];
+const EXTENDED_REPORT_COLUMNS = [
+  'totale_eur', 'cripto_ricevuta', 'quantita_ricevuta', 'politica_data_lotti', 'costo_provento_eur', 'dati_origine',
+  'quantita_ricevuta_prima', 'quantita_ricevuta_dopo',
 ];
 const REPORT_AMOUNTS = [
   'quantity', 'unitPrice', 'fees', 'beforeQuantity', 'beforeAverage', 'afterQuantity', 'afterAverage',
@@ -301,16 +346,31 @@ const REPORT_AMOUNTS = [
 export function exportReportCsv(rows) {
   if (!Array.isArray(rows)) throw error(1, 'il prospetto deve essere un elenco di operazioni.');
   if (rows.length > MAX_RECORDS) throw error(1, 'il prospetto supera il limite di 5000 record.');
-  return writeCsv(REPORT_COLUMNS, rows.map((row, index) => {
+  const extended = rows.some(row => !['acquisto', 'vendita'].includes(row.type) || EXTENDED_FIELDS.some(name => Object.hasOwn(row, name)));
+  const columns = extended ? [...REPORT_COLUMNS, ...EXTENDED_REPORT_COLUMNS] : REPORT_COLUMNS;
+  return writeCsv(columns, rows.map((row, index) => {
     const line = index + 2;
-    if (row.type !== 'acquisto' && row.type !== 'vendita') throw error(line, 'tipo di transazione non valido nel prospetto.');
+    if (!TRANSACTION_TYPES.includes(row.type)) throw error(line, 'tipo di transazione non valido nel prospetto.');
     const amounts = REPORT_AMOUNTS.map(name => {
       const value = row[name];
       if (value === undefined || value === null || value === '') return '';
       return decimalField(value, name, line, name === 'proceeds' || name === 'fiscalResult' || name === 'managementResult', false);
     });
+    const extra = [];
+    if (extended) {
+      for (const name of ['totalEur', 'receivedAsset', 'receivedQuantity', 'lotDatePolicy', 'rewardCostEur', 'source', 'receivedBeforeQuantity', 'receivedAfterQuantity']) {
+        const value = row[name];
+        if (value === undefined || value === null || value === '') extra.push('');
+        else if (name === 'receivedAsset') extra.push(textField(value, name, line));
+        else if (name === 'source') extra.push(JSON.stringify(sourceField(value, line)));
+        else if (name === 'lotDatePolicy') {
+          if (!['historical', 'exchange'].includes(value)) throw error(line, 'il campo lotDatePolicy deve essere historical o exchange.');
+          extra.push(value);
+        } else extra.push(decimalField(value, name, line, false, false));
+      }
+    }
     return [textField(row.id, 'id', line), dateField(row.date, 'data', line), integerField(row.order, 'ordine', line),
-      row.type, textField(row.asset, 'cripto', line), ...amounts, JSON.stringify(row.lotDetails ?? [])];
+      row.type, textField(row.asset, 'cripto', line), ...amounts, JSON.stringify(row.lotDetails ?? []), ...extra];
   }));
 }
 

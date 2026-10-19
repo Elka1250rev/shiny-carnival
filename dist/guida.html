@@ -34,6 +34,7 @@
           <li><a href="#iniziare">Preparare la sessione</a></li>
           <li><a href="#operazioni-posizioni">Operazioni e posizioni</a></li>
           <li><a href="#plusvalenza">Come si calcola la plusvalenza</a></li>
+          <li><a href="#permute-premi">Permute e premi EARN</a></li>
           <li><a href="#commissioni">Un esempio con le commissioni</a></li>
           <li><a href="#imposta">Minusvalenze e imposta dell’anno</a></li>
           <li><a href="#salvare">Importare ed esportare i dati</a></li>
@@ -46,11 +47,11 @@
         <section class="guide-section" id="iniziare" aria-labelledby="iniziare-title">
           <div class="eyebrow small">01 · I DATI DI PARTENZA</div>
           <h2 id="iniziare-title">Prepara la sessione</h2>
-          <p>CriptoConti stima i risultati delle compravendite in euro di cripto-attività ordinarie e la relativa imposta per persone fisiche residenti in Italia, fuori dall’attività d’impresa, in <strong>regime dichiarativo</strong>. Il calcolo dipende dai dati e dai costi documentati che inserisci.</p>
+          <p>CriptoConti stima i risultati di compravendite, permute verificate e proventi da detenzione di cripto-attività e la relativa imposta per persone fisiche residenti in Italia, fuori dall’attività d’impresa, in <strong>regime dichiarativo</strong>. Il calcolo dipende dai dati e dai costi documentati che inserisci.</p>
           <ol class="guide-steps">
             <li><strong>Imposta la data di apertura.</strong> È la data da cui inizi a ricostruire le operazioni. Per il calcolo di un intero anno parti dal 1° gennaio e includi tutte le operazioni successive di quell’anno.</li>
-            <li><strong>Inserisci la situazione iniziale.</strong> Per ogni crypto già posseduta, aggiungi i singoli lotti ancora disponibili all’apertura: quantità residua, data originaria di acquisto, sequenza e costo unitario fiscale, comprensivo delle commissioni storiche. Se non possiedi crypto, puoi lasciare vuota questa sezione.</li>
-            <li><strong>Aggiungi le operazioni.</strong> Indica data, sequenza della giornata, acquisto o vendita, crypto, quantità, prezzo unitario in euro e commissioni in euro. Il prezzo riguarda una singola unità: per 2 unità a 100 € inserisci quantità 2 e prezzo 100, non il totale 200.</li>
+            <li><strong>Inserisci la situazione iniziale.</strong> Per ogni crypto già posseduta, aggiungi i singoli lotti ancora disponibili all’apertura: quantità residua, data originaria di acquisto, sequenza e costo unitario fiscale documentato, esclusi gli oneri. Se un vecchio file contiene commissioni incorporate nel costo iniziale, correggilo in base alla documentazione: il sito non può separarle automaticamente. Se non possiedi crypto, puoi lasciare vuota questa sezione.</li>
+            <li><strong>Aggiungi le operazioni.</strong> Indica data, sequenza della giornata, acquisto o vendita, crypto, quantità, prezzo unitario in euro e commissioni in euro. Il prezzo riguarda una singola unità: per 2 unità a 100 € inserisci quantità 2 e prezzo 100, non il totale 200. Puoi anche importare il CSV exchange previsto dal sito e verificare permute, premi e controvalori prima di applicarli.</li>
             <li><strong>Inserisci le eventuali minusvalenze pregresse.</strong> Servono anno di origine e importo residuo già dichiarato e ancora disponibile all’apertura, appartenente alla stessa categoria fiscale crypto.</li>
             <li><strong>Scegli l’anno d’imposta.</strong> Il riepilogo fiscale riguarda l’anno selezionato. Le disponibilità sono invece ricostruite usando tutte le operazioni inserite, anche se appartengono a più anni.</li>
           </ol>
@@ -63,10 +64,10 @@
           <div class="eyebrow small">02 · LE DUE VISTE</div>
           <h2 id="operazioni-posizioni-title">Operazioni e posizioni</h2>
           <div class="guide-cards">
-            <div class="guide-card"><h3>Operazioni: il diario</h3><p>Una riga per ogni acquisto o vendita, con quantità, prezzo e risultato fiscale. Aprendo il dettaglio puoi confrontare la situazione prima e dopo l’operazione e vedere quali lotti fiscali sono stati utilizzati nella vendita.</p></div>
+            <div class="guide-card"><h3>Operazioni: il diario</h3><p>Una riga per ogni acquisto, vendita, permuta, provento o deposito EUR, con quantità, importi e trattamento fiscale. Aprendo il dettaglio puoi confrontare la situazione prima e dopo l’operazione e vedere quali lotti fiscali sono stati utilizzati nella vendita.</p></div>
             <div class="guide-card"><h3>Posizioni: ciò che rimane</h3><p>Il riepilogo delle disponibilità per crypto dopo tutte le operazioni: quantità, prezzo medio gestionale e costo fiscale residuo dei lotti. Non è una valutazione al prezzo corrente di mercato.</p></div>
           </div>
-          <p>Un acquisto aumenta le quantità e il costo del portafoglio, ma <strong>non realizza una plusvalenza o una minusvalenza</strong>. La vendita riduce le quantità e realizza il risultato fiscale. Il calcolatore segnala un errore se tenti di vendere più unità di quelle disponibili.</p>
+          <p>Un acquisto aumenta le quantità e il costo del portafoglio, ma <strong>non realizza una plusvalenza o una minusvalenza</strong>. La vendita riduce le quantità e realizza il risultato fiscale; una permuta neutrale trasferisce invece il costo storico senza realizzo. I proventi da detenzione sono imponibili alla ricezione. Il calcolatore segnala un errore se una cessione supera le unità disponibili.</p>
         </section>
 
         <section class="guide-section" id="plusvalenza" aria-labelledby="plusvalenza-title">
@@ -76,7 +77,7 @@
           <div class="guide-formula"><p>Nuovo costo gestionale = costo precedente + quantità acquistata × prezzo unitario + commissioni</p><p>Nuovo prezzo medio = nuovo costo gestionale ÷ nuova quantità</p></div>
           <p>Una vendita riduce il costo gestionale in proporzione alla quantità venduta e lascia invariato il prezzo medio delle unità residue. Quando non rimangono unità, il prezzo medio non è definito.</p>
           <p>Il <strong>risultato fiscale</strong> usa invece il metodo <strong>LIFO</strong> (“Last In, First Out”): si considerano vendute prima le unità acquistate più recentemente. Se un lotto non basta, la vendita consuma il successivo, risalendo agli acquisti precedenti. Il costo fiscale può quindi essere diverso dal costo medio gestionale.</p>
-          <div class="guide-formula"><p>Ricavo netto = quantità venduta × prezzo unitario − commissioni di vendita</p><p>Risultato fiscale = ricavo netto − costo fiscale dei lotti ceduti in LIFO</p></div>
+          <div class="guide-formula"><p>Corrispettivo lordo fiscale = quantità venduta × prezzo unitario lordo, oppure totale EUR verificato</p><p>Risultato fiscale = corrispettivo lordo − costo fiscale dei lotti ceduti in LIFO</p></div><p>Le commissioni di acquisto e di vendita non sono dedotte nel risultato fiscale, secondo la circolare AdE 30/E, § 3.1. Incidono invece sul conto gestionale: il ricavo netto della vendita sottrae le commissioni e il costo medio include gli oneri di acquisto.</p>
           <p>Un risultato positivo è una <strong>plusvalenza</strong>, uno negativo è una <strong>minusvalenza</strong>; zero indica un pareggio.</p>
           <h3>Un esempio: due acquisti e una vendita</h3>
           <p>Parti da zero. Acquisti prima 1 BTC a 30.000 €, poi 1 BTC a 50.000 € e infine vendi 1 BTC a 60.000 €. In questo esempio non ci sono commissioni.</p>
@@ -86,23 +87,33 @@
           <div class="guide-result"><strong>Plusvalenza fiscale: 60.000 − 50.000 = 10.000 €.</strong><p>La vendita utilizza il lotto più recente, acquistato a 50.000 €. Il BTC rimasto ha costo fiscale 30.000 €, mentre il suo prezzo medio gestionale resta 40.000 €.</p></div>
         </section>
 
+        <section class="guide-section" id="permute-premi" aria-labelledby="permute-premi-title">
+          <div class="eyebrow small">SCAMBI E RICOMPENSE</div>
+          <h2 id="permute-premi-title">Permute e premi EARN</h2>
+          <p><strong>Non ogni scambio crypto/crypto è fiscalmente neutrale.</strong> L’art. 67 TUIR richiede eguali caratteristiche e funzioni. La circolare 30/E porta come esempio bitcoin scambiati con ether; l’acquisto di un NFT mediante crypto è invece rilevante. Stablecoin EMT, ART e altri token richiedono una verifica dei diritti e delle funzioni: il ticker da solo non basta.</p>
+          <p>Una <strong>permuta neutrale</strong> non realizza reddito e trasferisce alle unità ricevute il costo storico dei lotti ceduti, senza aggiornarlo alla quotazione del giorno. Per esempio, se cedi BTC con costo fiscale 500 € e ricevi 10 ETH, il loro costo fiscale complessivo resta 500 €. In una <strong>permuta imponibile</strong>, il valore normale documentato della crypto ricevuta viene confrontato con il costo fiscale LIFO ceduto e diventa il costo del nuovo lotto.</p>
+          <p>Per una permuta neutrale devi scegliere esplicitamente se conservare le date storiche dei lotti ceduti o usare la data dello scambio. La scelta cambia il LIFO futuro: verifica il criterio con la documentazione e il professionista. Il sito non presenta queste alternative come una convenzione stabilita espressamente dalla legge.</p>
+          <p><strong>EARN non identifica un unico trattamento fiscale.</strong> Il CSV può contenere proventi da detenzione e premi promozionali. Per ciascuna riga verifica la natura: i proventi da detenzione sono imponibili <strong>al lordo alla ricezione</strong>, anche se la piattaforma trattiene una commissione. Non sono semplici acquisti gratuiti con tassazione rinviata alla vendita.</p>
+          <p>Il costo fiscale dei token del premio per una vendita futura è un dato distinto: devi documentare e confermare costo zero, valore già tassato oppure un costo per singola riga. Il sito non assume automaticamente nessuno di questi criteri. Per un premio di altra natura può essere registrato un ingresso come acquisto con costo esplicito documentato: ciò <strong>non dichiara il premio esente</strong> e non calcola eventuali obblighi relativi ad altre categorie di reddito.</p>
+        </section>
+
         <section class="guide-section" id="commissioni" aria-labelledby="commissioni-title">
-          <div class="eyebrow small">04 · COSTI E RICAVI NETTI</div>
+          <div class="eyebrow small">04 · COMMISSIONI E CONTO FISCALE</div>
           <h2 id="commissioni-title">Un esempio con le commissioni</h2>
-          <p>Acquisti 2 unità della stessa crypto al prezzo di 100 € ciascuna, pagando 10 € di commissioni. Il costo complessivo del lotto è <strong>2 × 100 + 10 = 210 €</strong>, quindi il costo unitario fiscale è <strong>105 €</strong>. Vendi poi le due unità in due operazioni separate:</p>
+          <p>Acquisti 2 unità della stessa crypto al prezzo di 100 € ciascuna, pagando 10 € di commissioni. Il costo gestionale è <strong>210 €</strong>, cioè 105 € per unità. Il costo fiscale esclude le commissioni: è <strong>200 €</strong>, cioè 100 € per unità. Vendi poi le unità in due operazioni separate:</p>
           <div class="guide-table-scroll" role="region" aria-label="Esempio di plusvalenza e minusvalenza con commissioni" tabindex="0">
-            <table class="guide-table"><caption>Importi in euro; ogni vendita riguarda 1 unità del lotto da 105 €.</caption><thead><tr><th scope="col">Operazione</th><th scope="col">Prezzo di vendita</th><th scope="col">Commissioni</th><th scope="col">Ricavo netto</th><th scope="col">Costo fiscale</th><th scope="col">Risultato</th></tr></thead><tbody><tr><th scope="row">Prima vendita</th><td>130 €</td><td>2 €</td><td>128 €</td><td>105 €</td><td>+23 € di plusvalenza</td></tr><tr><th scope="row">Seconda vendita</th><td>90 €</td><td>2 €</td><td>88 €</td><td>105 €</td><td>−17 € di minusvalenza</td></tr></tbody></table>
+            <table class="guide-table"><caption>Ogni vendita riguarda 1 unità; costo fiscale 100 €, costo gestionale 105 €.</caption><thead><tr><th scope="col">Operazione</th><th scope="col">Corrispettivo lordo</th><th scope="col">Commissioni</th><th scope="col">Ricavo netto gestionale</th><th scope="col">Risultato fiscale</th><th scope="col">Risultato gestionale</th></tr></thead><tbody><tr><th scope="row">Prima vendita</th><td>130 €</td><td>2 €</td><td>128 €</td><td>+30 € di plusvalenza</td><td>+23 €</td></tr><tr><th scope="row">Seconda vendita</th><td>90 €</td><td>2 €</td><td>88 €</td><td>−10 € di minusvalenza</td><td>−17 €</td></tr></tbody></table>
           </div>
-          <p>Se le due vendite appartengono allo stesso anno, il loro risultato netto è <strong>23 − 17 = 6 €</strong>. Le commissioni di acquisto sono incluse nel costo del lotto; quelle di vendita riducono il ricavo. La versione attuale supporta solo commissioni espresse e pagate in euro.</p>
+          <p>Se le vendite sono nello stesso anno, il saldo fiscale è <strong>30 − 10 = 20 €</strong>. Il risultato gestionale è invece <strong>23 − 17 = 6 €</strong>. Le commissioni non riducono la base fiscale. Nell’importazione exchange restano documentate e non vengono applicate una seconda volta alle quantità già nette effettive.</p>
         </section>
 
         <section class="guide-section" id="imposta" aria-labelledby="imposta-title">
           <div class="eyebrow small">05 · IL RIEPILOGO FISCALE</div>
           <h2 id="imposta-title">Minusvalenze e imposta dell’anno</h2>
-          <p>Per l’anno selezionato il calcolatore somma le plusvalenze e sottrae le minusvalenze realizzate. Se il saldo è positivo, utilizza le minusvalenze crypto pregresse ammesse ancora disponibili, iniziando da quelle che scadono prima. L’imponibile non può scendere sotto zero.</p>
-          <div class="guide-formula"><p>Saldo netto dell’anno = plusvalenze − minusvalenze dell’anno</p><p>Imponibile = massimo tra zero e saldo netto − minusvalenze pregresse compensate</p><p>Imposta stimata = imponibile × aliquota dell’anno</p></div>
-          <div class="guide-table-scroll" role="region" aria-label="Annualità supportate dal calcolatore" tabindex="0"><table class="guide-table guide-tax-table"><caption>Regole ordinarie implementate per le compravendite supportate.</caption><thead><tr><th scope="col">Anno d’imposta</th><th scope="col">Aliquota</th><th scope="col">Soglia di esenzione</th></tr></thead><tbody><tr><th scope="row">2025</th><td>26%</td><td>Nessuna</td></tr><tr><th scope="row">2026</th><td>33%</td><td>Nessuna</td></tr></tbody></table></div>
-          <p>Dal 2025 non viene applicata la precedente soglia di 2.000 €. Un’eventuale disciplina speciale per determinati token di moneta elettronica in euro non è inclusa in queste aliquote ordinarie supportate.</p>
+          <p>Per l’anno selezionato il calcolatore somma plusvalenze e proventi da detenzione e sottrae le minusvalenze crypto realizzate, secondo la compensazione descritta dalla circolare 30/E, § 3.1. Se il saldo è positivo, utilizza le minusvalenze crypto pregresse ammesse ancora disponibili, iniziando da quelle che scadono prima. L’imponibile non può scendere sotto zero.</p>
+          <div class="guide-formula"><p>Saldo netto dell’anno = plusvalenze + proventi da detenzione − minusvalenze dell’anno</p><p>Imponibile = massimo tra zero e saldo netto − minusvalenze pregresse compensate</p><p>Imposta stimata = imponibile × aliquota dell’anno</p></div>
+          <div class="guide-table-scroll" role="region" aria-label="Annualità supportate dal calcolatore" tabindex="0"><table class="guide-table guide-tax-table"><caption>Aliquote ordinarie delle operazioni supportate, esclusi i regimi speciali.</caption><thead><tr><th scope="col">Anno d’imposta</th><th scope="col">Aliquota</th><th scope="col">Soglia di esenzione</th></tr></thead><tbody><tr><th scope="row">2025</th><td>26%</td><td>Nessuna</td></tr><tr><th scope="row">2026</th><td>33%</td><td>Nessuna</td></tr></tbody></table></div>
+          <p>Dal 2025 non viene applicata la precedente soglia di 2.000 €. Dal 2026 determinati token di moneta elettronica denominati in euro hanno una disciplina speciale al 26%, con neutralità della mera conversione euro/token e del rimborso nominale in euro. Il sito non la implementa: non applicare automaticamente il 33% a tali operazioni.</p>
           <div class="guide-result"><strong>Esempio per il 2026: imposta stimata di 264 €.</strong><p>Con 1.000 € di saldo netto positivo e 200 € di minusvalenze pregresse utilizzabili, l’imponibile è 800 €. L’imposta è 800 × 33% = 264 €.</p></div>
           <h3>Quanto durano le minusvalenze pregresse?</h3>
           <p>Sono utilizzabili entro i <strong>quattro periodi d’imposta successivi</strong> all’anno di origine, se correttamente dichiarate e appartenenti alla categoria ammessa. Per esempio, una perdita del 2022 è utilizzabile fino al 2026 incluso; una del 2021 è scaduta nel 2026 e viene esclusa dal calcolo con una segnalazione.</p>
@@ -116,21 +127,31 @@
           <h2 id="salvare-title">Importare ed esportare i dati</h2>
           <p><strong>Il sito non registra le tue transazioni.</strong> Non occorre un account: i dati inseriti o importati restano nella memoria della pagina, senza essere inviati a un server o conservati automaticamente tra una sessione e l’altra. Ricaricando o chiudendo la pagina perdi la sessione.</p>
           <dl class="guide-exports">
-            <div><dt>Esporta dati</dt><dd>Scarica il CSV della sessione: data di apertura, lotti iniziali, operazioni e minusvalenze pregresse. È il file da conservare per riprendere il lavoro.</dd></div>
-            <div><dt>Importa CSV</dt><dd>Ricarica il CSV esportato da CriptoConti. Puoi controllare l’anteprima prima di confermare: l’importazione sostituisce la sessione corrente e ricalcola i risultati. Esporta prima gli eventuali dati da conservare.</dd></div>
+            <div><dt>Esporta dati</dt><dd>Scarica il CSV della sessione: data di apertura, lotti iniziali, operazioni e minusvalenze pregresse. La versione 2 conserva anche tutte le 17 colonne originali dell’exchange, i totali esatti e le decisioni di importazione. È il file da conservare per riprendere il lavoro.</dd></div>
+            <div><dt>Importa CSV</dt><dd>Ricarica il CSV esportato da CriptoConti oppure il tracciato exchange a 17 colonne riconosciuto dal sito. Il CSV CriptoConti sostituisce la sessione completa; quello exchange richiede una verifica e permette di sostituire soltanto le operazioni o aggiungere date non ancora presenti, conservando lotti e perdite. Esporta prima i dati da conservare.</dd></div>
             <div><dt>Prospetto CSV</dt><dd>Esporta i risultati delle operazioni per consultarli o elaborarli. È un prospetto di uscita, distinto dal CSV completo da usare per ripristinare la sessione.</dd></div>
             <div><dt>Esporta PDF</dt><dd>Prepara un documento da scaricare con il riepilogo fiscale dell’anno selezionato e i risultati di tutte le operazioni inserite, anche se la tabella a schermo è filtrata. Il PDF serve alla consultazione e non può ripristinare la sessione.</dd></div>
           </dl>
-          <p>Importa soltanto il formato CSV previsto dal sito, non direttamente i file di un exchange. L’importazione Excel è prevista come estensione futura e non è disponibile in questa versione. I file scaricati sono copie salvate sul tuo dispositivo: conservali con la cura riservata alla tua documentazione fiscale.</p>
+          <h3>Come verificare il CSV exchange</h3>
+          <p>Il tracciato contiene 17 colonne, fra cui <code>datetime_tz_CET</code>, <code>sent_amount</code>, <code>received_amount</code>, i due controvalori EUR e i dati della commissione. Le quantità sono già nette ed effettive: 1 unità ricevuta con commissione 0,001 indica un accredito di 1, senza una seconda sottrazione. I controvalori effettivi vanno verificati rispetto ai totali lordi fiscali.</p>
+          <ol class="guide-steps">
+            <li><strong>Prepara i lotti iniziali.</strong> Il file non contiene i costi storici mancanti. Scegli se sostituire le operazioni o aggiungere date diverse da quelle già presenti.</li>
+            <li><strong>Conferma data e sequenza.</strong> Il sito conserva data e ora del file, senza conversione automatica del fuso; a parità di secondo mantiene l’ordine delle righe.</li>
+            <li><strong>Verifica gli importi fiscali lordi.</strong> Puoi rettificare il totale EUR per riga senza modificare i valori originali. Nessuna quotazione o commissione incerta viene stimata automaticamente.</li>
+            <li><strong>Qualifica scambi e premi.</strong> Conferma per ogni coppia il requisito delle permute neutrali e per ogni premio la natura e il costo documentato. Una scelta collettiva richiede la verifica di tutte le righe coinvolte.</li>
+            <li><strong>Controlla le commissioni in una terza crypto.</strong> Specifica se sono già incluse senza altri movimenti oppure se rappresentano un pagamento aggiuntivo di un servizio in crypto, da registrare come cessione separata.</li>
+          </ol>
+          <p>L’anteprima mostra tutte le righe, a pagine, con eventuali rettifiche. Nessuna operazione viene scartata silenziosamente: gli errori bloccano l’importazione lasciando intatta la sessione. Dopo la conferma, esporta il CSV completo versione 2 per conservare anche la fonte e le decisioni. I depositi EUR rimangono movimenti informativi e non producono reddito.</p>
+          <p>Sono supportati il CSV CriptoConti e il tracciato exchange descritto qui sotto; altri tracciati non vengono interpretati automaticamente. L’importazione Excel è prevista come estensione futura e non è disponibile in questa versione. I file scaricati sono copie salvate sul tuo dispositivo: conservali con la cura riservata alla tua documentazione fiscale.</p>
         </section>
 
         <section class="guide-section" id="perimetro" aria-labelledby="perimetro-title">
           <div class="eyebrow small">07 · IL PERIMETRO SUPPORTATO</div>
           <h2 id="perimetro-title">Cosa comprende il calcolo</h2>
-          <p>Le transazioni supportate sono acquisti e vendite contro euro di cripto-attività ordinarie negli anni <strong>2025 e 2026</strong>, con apertura in uno di questi anni. Le date originarie dei lotti iniziali possono risalire ad anni precedenti. Un nuovo anno richiede un aggiornamento delle regole del sito.</p>
+          <p>Le operazioni supportate sono acquisti e vendite contro euro, permute qualificate esplicitamente e proventi da detenzione verificati negli anni <strong>2025 e 2026</strong>, con apertura in uno di questi anni. Le date originarie dei lotti iniziali possono risalire ad anni precedenti. Un nuovo anno richiede un aggiornamento delle regole del sito.</p>
           <p>Il nome o simbolo della crypto serve a raggruppare le operazioni: <strong>non determina automaticamente la sua categoria fiscale</strong>. Usa lo stesso identificativo per la stessa attività e verifica che rientri nel perimetro supportato.</p>
-          <p>Il sito non gestisce permute fra crypto, staking, lending, DeFi, derivati, NFT, donazioni, successioni, rivalutazioni o i trattamenti speciali dei token di moneta elettronica in euro. Non ricostruisce costi mancanti o non documentati.</p>
-          <p>La stima riguarda l’imposta sui risultati delle compravendite supportate. Non comprende il monitoraggio fiscale, i quadri della dichiarazione, l’imposta sul valore o sul possesso delle cripto-attività e gli eventuali obblighi di bollo. Il risultato non costituisce quindi il totale di tutti i possibili obblighi fiscali sulle crypto.</p>
+          <p>Il sito non qualifica automaticamente prodotti DeFi, NFT, strumenti finanziari o premi promozionali. Non gestisce derivati, donazioni, successioni, rivalutazioni automatiche o i trattamenti speciali dei token di moneta elettronica in euro. Se un’attività è fuori dal perimetro fiscale supportato, la scelta “permuta imponibile” non basta a renderla calcolabile. Non sono ricostruiti costi mancanti o non documentati.</p>
+          <p>La stima riguarda l’imposta sui risultati delle operazioni supportate e confermate. Non comprende il monitoraggio fiscale, i quadri della dichiarazione, l’imposta sul valore o sul possesso delle cripto-attività e gli eventuali obblighi di bollo. Il risultato non costituisce quindi il totale di tutti i possibili obblighi fiscali sulle crypto.</p>
         </section>
 
         <section class="guide-section" id="fonti" aria-labelledby="fonti-title">
@@ -138,10 +159,11 @@
           <h2 id="fonti-title">Fonti e avvertenze</h2>
           <p>Le regole implementate e i limiti descritti in questa guida si basano sulle seguenti fonti ufficiali:</p>
           <ul class="guide-sources">
-            <li><a href="https://www.agenziaentrate.gov.it/portale/documents/20143/5589638/Circolare+criptoattivita+del+27+ottobre+2023.pdf/1154a95a-80ea-a6ec-bcc0-731b844db9e6" target="_blank" rel="noopener noreferrer">Agenzia delle Entrate, circolare 30/E del 27 ottobre 2023 (PDF)</a>: disciplina delle cripto-attività e metodo LIFO nel regime dichiarativo, paragrafo 3.2.1.</li>
+            <li><a href="https://www.agenziaentrate.gov.it/portale/documents/20143/5589638/Circolare+criptoattivita+del+27+ottobre+2023.pdf" target="_blank" rel="noopener noreferrer">Agenzia delle Entrate, circolare 30/E del 27 ottobre 2023 (PDF ufficiale)</a>, disponibile anche in una <a href="https://www.dirittobancario.it/wp-content/uploads/2023/10/Circolare-Agenzia-delle-Entrate-27-ottobre-2023-n.-30-E.pdf" target="_blank" rel="noopener noreferrer">copia del documento verificata</a>: permute, costi e proventi al § 3.1, pp. 47–51; LIFO dichiarativo al § 3.2.1. Il testo precede le modifiche successive a soglie e aliquote.</li>
+            <li><a href="https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.presidente.repubblica:1986-12-22;917~art67!vig=" target="_blank" rel="noopener noreferrer">TUIR, art. 67</a> e <a href="https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:decreto.presidente.repubblica:1986-12-22;917~art68!vig=" target="_blank" rel="noopener noreferrer">art. 68</a>: fattispecie e determinazione del reddito crypto. <a href="https://www.normattiva.it/uri-res/N2Ls?urn:nir:presidente.repubblica:decreto:1986-12-22;917~art9=" target="_blank" rel="noopener noreferrer">Art. 9</a>: proventi in natura.</li>
             <li><a href="https://www.normattiva.it/uri-res/N2Ls?urn:nir:stato:legge:2024-12-30;207" target="_blank" rel="noopener noreferrer">Legge 30 dicembre 2024, n. 207</a>: modifiche alle aliquote e alla soglia.</li>
             <li><a href="https://www.normattiva.it/eli/id/2025/12/30/25G00212/ORIGINAL" target="_blank" rel="noopener noreferrer">Legge 30 dicembre 2025, n. 199</a>: disciplina specifica dei token di moneta elettronica denominati in euro, esclusi dal perimetro di questa versione.</li>
-            <li><a href="https://infoprecompilata.agenziaentrate.gov.it/portale/web/guest/quadro-t" target="_blank" rel="noopener noreferrer">Agenzia delle Entrate, quadro T</a>: indicazioni dichiarative e compensazione delle minusvalenze.</li>
+            <li><a href="https://www.agenziaentrate.gov.it/portale/730-2026/modello-e-istruzioni" target="_blank" rel="noopener noreferrer">Agenzia delle Entrate, istruzioni 730/2026</a>, anche nella <a href="https://www.informazionefiscale.it/IMG/pdf/730_2026_istruzioni_agg_13_04_2026_1_.pdf" target="_blank" rel="noopener noreferrer">copia aggiornata al 13 aprile 2026</a>, pp. 130–131: sezione V e compensazioni.</li>
           </ul>
           <p class="guide-small">I collegamenti alle fonti si aprono in una nuova scheda.</p>
         </section>

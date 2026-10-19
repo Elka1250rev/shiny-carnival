@@ -10,17 +10,17 @@ const lot = (id, overrides) => ({ id, asset: 'BTC', acquiredOn: '2024-01-01', or
 const report = (input, year = 2025) => buildPdfReport(calculate(input, year), input.openingDate);
 const operationRows = html => [...html.matchAll(/<tbody>([\s\S]*?)<\/tbody>/g)].flatMap(match => [...match[1].matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map(row => row[1]));
 
-test('the PDF report identifies purchases as unrealized and includes acquisition fees', () => {
+test('the PDF report separates acquisition fees from the fiscal purchase basis', () => {
   const html = report(dataset({ transactions: [buy('purchase', { quantity: '2', unitPrice: '100', fees: '3' })] }));
   const [row] = operationRows(html);
   assert.match(row, /01\/02\/2025<br><small>Sequenza 1<\/small>/);
   assert.match(row, /<td>BTC<\/td><td>Acquisto<\/td>/);
   assert.match(row, /<td class="numeric">2<\/td>/);
-  assert.match(row, /<td class="numeric">3,00 €<\/td><td class="numeric">—<\/td><td class="numeric">203,00 €<\/td><td class="numeric">Nessun realizzo<\/td>/);
+  assert.match(row, /<td class="numeric">3,00 €<\/td><td class="numeric">—<\/td><td class="numeric">200,00 €<\/td><td class="numeric">Nessun realizzo<\/td>/);
   assert.match(html, /<dt>Plusvalenze<\/dt><dd>0,00 €<\/dd>/);
 });
 
-test('sale rows distinguish gains, losses and break-even after commissions', () => {
+test('sale rows use gross fiscal proceeds and distinguish gains, losses and break-even', () => {
   const html = report(dataset({
     initialLots: [lot('btc'), lot('eth', { asset: 'ETH' }), lot('nespole', { asset: 'NESPOLE' })],
     transactions: [
@@ -30,11 +30,11 @@ test('sale rows distinguish gains, losses and break-even after commissions', () 
     ]
   }));
   const [gain, loss, even] = operationRows(html);
-  assert.match(gain, /129,00 €<\/td><td class="numeric">100,00 €<\/td><td class="numeric">Plusvalenza \+29,00 €/);
-  assert.match(loss, /88,00 €<\/td><td class="numeric">100,00 €<\/td><td class="numeric">Minusvalenza −12,00 €/);
+  assert.match(gain, /130,00 €<\/td><td class="numeric">100,00 €<\/td><td class="numeric">Plusvalenza \+30,00 €/);
+  assert.match(loss, /90,00 €<\/td><td class="numeric">100,00 €<\/td><td class="numeric">Minusvalenza −10,00 €/);
   assert.match(even, /Pareggio 0,00 €/);
-  assert.match(html, /<dt>Risultato netto<\/dt><dd>17,00 €<\/dd>/);
-  assert.match(html, /<dt>Imposta sostitutiva stimata<\/dt><dd>4,42 €<\/dd>/);
+  assert.match(html, /<dt>Risultato netto<\/dt><dd>20,00 €<\/dd>/);
+  assert.match(html, /<dt>Imposta sostitutiva stimata<\/dt><dd>5,20 €<\/dd>/);
 });
 
 test('sale results use fiscal LIFO rather than the moving weighted average', () => {
@@ -46,7 +46,7 @@ test('sale results use fiscal LIFO rather than the moving weighted average', () 
     ]
   }));
   const [, sale] = operationRows(html);
-  assert.match(sale, /147,00 €<\/td><td class="numeric">72,00 €<\/td><td class="numeric">Plusvalenza \+75,00 €/);
+  assert.match(sale, /150,00 €<\/td><td class="numeric">70,00 €<\/td><td class="numeric">Plusvalenza \+80,00 €/);
   assert.doesNotMatch(sale, /85,50/);
 });
 
@@ -75,7 +75,7 @@ test('formatting preserves eighteen decimal quantities and values beyond Number 
     buy('huge', { date: '2025-02-02', asset: 'ETH', unitPrice: '123456789012345678901234567890.12', fees: '0.005' })
   ] }));
   assert.match(operationRows(html)[0], /<td class="numeric">0,000000000000000001<\/td>/);
-  assert.match(operationRows(html)[1], /123\.456\.789\.012\.345\.678\.901\.234\.567\.890,13 €/);
+  assert.match(operationRows(html)[1], /123\.456\.789\.012\.345\.678\.901\.234\.567\.890,12 €/);
   assert.doesNotMatch(html, /e\+\d/);
 });
 
@@ -112,8 +112,8 @@ test('gains and losses smaller than eighteen decimal places retain their exact c
 });
 
 test('fractional LIFO amounts round once and distinguish results below and at half a cent', () => {
-  const html = report(dataset({ transactions: [
-    buy('fractional', { quantity: '3', unitPrice: '100', fees: '0.014999999999999999' }),
+  const html = report(dataset({ version: 2, transactions: [
+    buy('fractional', { quantity: '3', unitPrice: '0', totalEur: '300.014999999999999999' }),
     sell('below-half', { order: 2, unitPrice: '100' }),
     buy('exact', { order: 3, asset: 'ETH', unitPrice: '100' }),
     sell('half-gain', { order: 4, asset: 'ETH', quantity: '0.5', unitPrice: '100.01' }),
@@ -143,9 +143,9 @@ test('purchase costs, sale proceeds and annual totals round exact products direc
 
 test('remaining and expired loss amounts avoid a second rounding after exact compensation', () => {
   const input = dataset({
-    carryLosses: [{ id: 'carry', year: 2021, amount: '0.01' }],
+    version: 2, carryLosses: [{ id: 'carry', year: 2021, amount: '0.01' }],
     transactions: [
-      buy('purchase', { quantity: '3', unitPrice: '100', fees: '0.014999999999999999' }),
+      buy('purchase', { quantity: '3', unitPrice: '0', totalEur: '300.014999999999999999' }),
       sell('sale', { order: 2, unitPrice: '100.01' })
     ]
   });
@@ -210,7 +210,7 @@ test('the plain report model and HTML share exact formatted values without a DOM
     '0,00 €', '0,00 €', 'Plusvalenza inferiore a 0,005 €'
   ]);
   assert.equal(data.rows[1][1], '石油');
-  assert.equal(data.rows[1][6], '123.456.789.012.345.678.901.234.567.890,13 €');
+  assert.equal(data.rows[1][6], '123.456.789.012.345.678.901.234.567.890,12 €');
   for (const row of data.rows) {
     assert.equal(row.length, data.columns.length);
     for (const value of row.slice(1)) assert.ok(html.includes(value), value);
@@ -291,4 +291,126 @@ test('rendering a full 5000-operation report neither truncates nor mutates calcu
   assert.match(html, /Operazioni: 5000\./);
   assert.match(html, /Sequenza 5000<\/small>/);
   assert.deepEqual(result, snapshot);
+});
+
+test('neutral exchanges show both assets, precise quantities and the transferred historical cost', () => {
+  const input = dataset({
+    version: 2,
+    initialLots: [lot('btc', { quantity: '3', unitCost: '10' })],
+    transactions: [buy('swap', {
+      type: 'permuta_neutrale', quantity: '1', unitPrice: '0', receivedAsset: 'Ξ ETH',
+      receivedQuantity: '0.123456789012345678', lotDatePolicy: 'historical',
+    })],
+  });
+  const calculated = calculate(input, 2025);
+  const data = buildPdfReportData(calculated, input.openingDate);
+  assert.deepEqual(data.rows[0], [
+    '01/02/2025\nSequenza 1', 'BTC / Ξ ETH', 'Permuta neutrale',
+    'Ceduta: 1 BTC\nRicevuta: 0,123456789012345678 Ξ ETH', '0,00 €', '—', '10,00 €',
+    'Nessun realizzo; costo storico trasferito',
+  ]);
+  const html = buildPdfReport(calculated, input.openingDate);
+  const [row] = operationRows(html);
+  assert.match(row, /Nessun realizzo; costo storico trasferito/);
+  assert.doesNotMatch(row, /Plusvalenza|Minusvalenza|Pareggio/);
+  assert.match(html, /soltanto le permute tra cripto-attività con eguali caratteristiche e funzioni/);
+  assert.match(html, /trasferiscono il costo storico ai lotti ricevuti/);
+});
+
+test('taxable exchanges use the received normal value and remain distinct from neutral exchanges', () => {
+  const input = dataset({
+    version: 2, initialLots: [lot('btc')],
+    transactions: [
+      buy('taxable-swap', { type: 'permuta_imponibile', unitPrice: '0', receivedAsset: 'ETH', receivedQuantity: '2', totalEur: '150' }),
+      sell('following-sale', { date: '2025-02-02', asset: 'ETH', unitPrice: '100' }),
+    ],
+  });
+  const data = buildPdfReportData(calculate(input, 2025), input.openingDate);
+  assert.deepEqual(data.rows[0].slice(1), [
+    'BTC / ETH', 'Permuta imponibile', 'Ceduta: 1 BTC\nRicevuta: 2 ETH',
+    '0,00 €', '150,00 €', '100,00 €', 'Plusvalenza +50,00 €',
+  ]);
+  assert.equal(data.rows[1][6], '75,00 €');
+  assert.equal(data.rows[1][7], 'Plusvalenza +25,00 €');
+  assert.deepEqual(data.summary[0], { label: 'Plusvalenze', value: '75,00 €' });
+  assert.ok(data.columns.includes('Corrispettivo / provento lordo (€)'));
+  assert.ok(data.columns.includes('Costo fiscale / trasferito (€)'));
+});
+
+test('holding rewards are income at receipt and are separated from capital gains in the annual summary', () => {
+  const input = dataset({
+    version: 2, initialLots: [lot('btc', { quantity: '2' })],
+    transactions: [
+      sell('gain', { unitPrice: '120' }),
+      buy('reward', { type: 'provento', order: 2, asset: 'ETH', quantity: '0.123456789012345678', unitPrice: '0', totalEur: '12', rewardCostEur: '0' }),
+      sell('loss', { order: 3, unitPrice: '95' }),
+    ],
+  });
+  const result = calculate(input, 2025);
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.deepEqual(data.rows[1].slice(1), [
+    'ETH', 'Provento da detenzione', '0,123456789012345678', '0,00 €', '12,00 €', '0,00 €', 'Provento imponibile 12,00 €',
+  ]);
+  const summary = Object.fromEntries(data.summary.map(item => [item.label, item.value]));
+  assert.equal(summary.Plusvalenze, '20,00 €');
+  assert.equal(summary['Proventi da detenzione'], '12,00 €');
+  assert.equal(summary.Minusvalenze, '5,00 €');
+  assert.equal(summary['Risultato netto'], '27,00 €');
+  assert.equal(summary['Imposta sostitutiva stimata'], '7,02 €');
+  const [_, reward] = operationRows(buildPdfReport(result, input.openingDate));
+  assert.doesNotMatch(reward, /Plusvalenza|Minusvalenza|Pareggio/);
+  assert.match(data.notes.join(' '), /non viene assunto automaticamente pari a zero/);
+  assert.match(data.notes.join(' '), /non è una deduzione dal reddito ricevuto/);
+});
+
+test('documented subsequent reward basis does not reduce the gross receipt income', () => {
+  const input = dataset({ version: 2, transactions: [
+    buy('reward', { type: 'provento', asset: 'ETH', unitPrice: '0', totalEur: '12', rewardCostEur: '12' }),
+    sell('sale', { order: 2, asset: 'ETH', unitPrice: '20' }),
+  ] });
+  const data = buildPdfReportData(calculate(input, 2025), input.openingDate);
+  assert.equal(data.rows[0][6], '12,00 €');
+  assert.equal(data.rows[0][7], 'Provento imponibile 12,00 €');
+  assert.equal(data.rows[1][6], '12,00 €');
+  assert.equal(data.rows[1][7], 'Plusvalenza +8,00 €');
+  assert.ok(data.summary.some(item => item.label === 'Risultato netto' && item.value === '20,00 €'));
+});
+
+test('sub-cent holding rewards retain their income classification and selected-year boundaries', () => {
+  const input = dataset({ version: 2, transactions: [
+    buy('tiny-reward', { type: 'provento', asset: 'ETH', unitPrice: '0', totalEur: '0.000000000000000001', rewardCostEur: '0' }),
+  ] });
+  const result = calculate(input, 2026);
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.equal(data.rows[0][7], 'Provento imponibile inferiore a 0,005 €');
+  assert.ok(data.summary.some(item => item.label === 'Proventi da detenzione' && item.value === '0,00 €'));
+  assert.equal(data.summaryTitle, 'Riepilogo fiscale · anno 2026');
+  delete result.rows[0].display;
+  assert.equal(buildPdfReportData(result, input.openingDate).rows[0][7], data.rows[0][7]);
+});
+
+test('euro deposits are explicitly informational and never represented as sales or break-even', () => {
+  const input = dataset({ version: 2, transactions: [
+    buy('fiat', { type: 'deposito_eur', asset: 'EUR', quantity: '100.25', unitPrice: '1' }),
+  ] });
+  const data = buildPdfReportData(calculate(input, 2025), input.openingDate);
+  assert.deepEqual(data.rows[0].slice(1), ['EUR', 'Deposito EUR', '100,25', '0,00 €', '—', '—', 'Informativo, nessun reddito']);
+  const [row] = operationRows(report(input));
+  assert.doesNotMatch(row, /Vendita|Plusvalenza|Minusvalenza|Pareggio/);
+  assert.equal(data.columns.length, 8);
+  assert.equal(data.rows[0].length, 8);
+});
+
+test('received asset names are escaped in both exchange cells without changing the plain PDF model', () => {
+  const input = dataset({ version: 2, initialLots: [lot('btc')], transactions: [
+    buy('swap', { type: 'permuta_neutrale', unitPrice: '0', receivedAsset: 'ETH', receivedQuantity: '1', lotDatePolicy: 'exchange' }),
+  ] });
+  const result = calculate(input, 2025);
+  result.rows[0].receivedAsset = '<svg onload="bad()">&';
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.match(data.rows[0][1], /<svg onload="bad\(\)">&/);
+  assert.match(data.rows[0][3], /Ricevuta: 1 <svg/);
+  const html = buildPdfReport(result, input.openingDate);
+  assert.equal((html.match(/&lt;svg onload=&quot;bad\(\)&quot;&gt;&amp;/g) ?? []).length, 2);
+  assert.doesNotMatch(html, /<svg/);
 });

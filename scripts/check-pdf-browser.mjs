@@ -5,7 +5,8 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 import { chromium, devices } from 'playwright';
-import { exportCsv } from '../dist/csv.js';
+import { exportCsv, parseCsv } from '../dist/csv.js';
+import { EXCHANGE_CSV_COLUMNS } from '../dist/exchange-csv.js';
 
 // These fixtures are synthetic. No financial data or external service is used.
 const project = fileURLToPath(new URL('../', import.meta.url));
@@ -225,6 +226,142 @@ async function newPage(options, label) {
   return page;
 }
 
+
+const exchangeSourceRow = overrides => ({
+  id: 'exchange-buy', datetime_tz_CET: '2025-08-01-12:00:00', type: 'Buy',
+  label: '', market_model_type: 'SPOT', order_type: 'MARKET',
+  sent_amount: '100.00', sent_currency: 'EUR', sent_value_EUR: '100.00', sent_address: '',
+  received_amount: '3', received_currency: 'ALFA', received_value_EUR: '99.50', received_address: '',
+  fee_amount: '0', fee_currency: '', fee_value_EUR: '0', ...overrides
+});
+const exchangeSource = [
+  exchangeSourceRow({ id: 'exchange-deposit', datetime_tz_CET: '2025-07-31-12:00:00', type: 'Deposit',
+    sent_amount: '0', sent_currency: '', sent_value_EUR: '0', received_amount: '100', received_currency: 'EUR', received_value_EUR: '100' }),
+  exchangeSourceRow({ label: '<img src=x onerror="window.__exchangeXss = true">', sent_address: 'synthetic, "quoted" address' }),
+  exchangeSourceRow({ id: 'exchange-swap', datetime_tz_CET: '2025-08-02-12:00:00', type: 'Trade',
+    sent_amount: '1', sent_currency: 'ALFA', sent_value_EUR: '33.333333333333333333',
+    received_amount: '2', received_currency: 'BETA', received_value_EUR: '42.00' }),
+  exchangeSourceRow({ id: 'exchange-reward', datetime_tz_CET: '2025-08-03-12:00:00', type: 'Receive', label: 'Reward', market_model_type: 'EARN',
+    sent_amount: '0', sent_currency: '', sent_value_EUR: '0', received_amount: '0.500000000000000001', received_value_EUR: '20.00' }),
+  exchangeSourceRow({ id: 'exchange-cashback', datetime_tz_CET: '2025-08-03-13:00:00', type: 'Receive', label: 'Reward', market_model_type: 'EARN',
+    sent_amount: '0', sent_currency: '', sent_value_EUR: '0', received_amount: '0.25', received_value_EUR: '9.00' }),
+  exchangeSourceRow({ id: 'exchange-sell', datetime_tz_CET: '2025-08-04-12:00:00', type: 'Sell',
+    sent_amount: '2', sent_currency: 'BETA', sent_value_EUR: '100', received_amount: '100', received_currency: 'EUR', received_value_EUR: '100' })
+];
+function sourceCsv(rows) {
+  return [EXCHANGE_CSV_COLUMNS, ...rows.map(row => EXCHANGE_CSV_COLUMNS.map(name => row[name]))]
+    .map(fields => fields.map(value => '"' + value.replaceAll('"', '""') + '"').join(',')).join('\r\n');
+}
+async function openExchangeReview(page, rows) {
+  await page.locator('#import-button').click();
+  await page.locator('#import-file').setInputFiles({ name: 'synthetic-platform.csv', mimeType: 'text/csv', buffer: Buffer.from(sourceCsv(rows)) });
+  await page.locator('#exchange-review').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#exchange-review .exchange-review-table tbody tr').count(), rows.length,
+    'The source preview must show every source row, including informational deposits and rewards.');
+}
+async function assertReviewBlocked(page, description) {
+  const button = page.locator('#confirm-import');
+  await page.waitForFunction(() => !document.getElementById('confirm-import').disabled
+    || [...document.querySelectorAll('#exchange-review .exchange-review-errors')].some(node => !node.hidden));
+  if (!await button.isDisabled()) {
+    await button.click();
+    assert.equal(await page.locator('#import-dialog').isVisible(), true, description);
+    const visibleErrors = page.locator('#import-error:visible, #exchange-review .exchange-review-errors:visible');
+    assert.ok(await visibleErrors.count() > 0, 'A blocked import must explain the missing choices or unsupported data.');
+  }
+  assert.equal(await page.locator('#import-dialog').isVisible(), true, description);
+}
+async function verifyExchangeImport(page, label) {
+  const initial = dataset({ initialLots: [lot('RESIDUO', '1', '5')] });
+  await importDataset(page, initial, '', 0);
+  const originalSession = await downloadSession(page, 'exchange-' + label + '-original-session');
+  await openExchangeReview(page, exchangeSource);
+  await assertReviewBlocked(page, 'Source rows must not become transactions until required choices are explicit.');
+  await page.locator('#import-dialog').getByRole('button', { name: 'Annulla', exact: true }).click();
+  assert.equal(await downloadSession(page, 'exchange-' + label + '-cancelled-session'), originalSession,
+    'Reviewing or cancelling an incomplete source CSV must preserve the current session.');
+
+  await openExchangeReview(page, [exchangeSourceRow({ id: 'unsupported-type', type: 'Withdraw' })]);
+  await assertReviewBlocked(page, 'An unsupported record must block import instead of being silently dropped.');
+  assert.match(await page.locator('#exchange-review').textContent(), /non supportat|bloccata/);
+  await page.locator('#import-dialog').getByRole('button', { name: 'Annulla', exact: true }).click();
+  assert.equal(await downloadSession(page, 'exchange-' + label + '-unsupported-session'), originalSession);
+
+  await openExchangeReview(page, exchangeSource);
+  const review = page.locator('#exchange-review');
+  await review.getByLabel('Come inserire le operazioni', { exact: true }).selectOption('replace');
+  await review.getByLabel(/^Confermo data e ora come riportate nel CSV/).check();
+  await review.getByLabel(/^Confermo le quantità nette effettive del CSV/).check();
+  await review.getByLabel(/ALFA → BETA/).selectOption('neutral');
+  await review.getByLabel('Data dei lotti ricevuti nelle permute neutrali', { exact: true }).selectOption('historical');
+  await review.getByLabel('Natura documentata dei premi', { exact: true }).selectOption('per_row');
+  await review.getByLabel('Costo fiscale documentato dei token ricevuti, per le vendite future', { exact: true }).selectOption('manual');
+  await assertReviewBlocked(page, 'The manual reward-cost policy must block import until every documented cost is supplied.');
+  await review.locator('[data-source-line="5"]').click();
+  await review.getByLabel('Trattamento documentato di questo premio', { exact: true }).selectOption('holding_income');
+  await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).fill('7.00');
+  await review.getByRole('button', { name: 'Salva rettifica', exact: true }).click();
+  await assertReviewBlocked(page, 'Mixed EARN data must require the documented treatment and cost of the second reward too.');
+  await review.locator('[data-source-line="6"]').click();
+  await review.getByLabel('Trattamento documentato di questo premio', { exact: true }).selectOption('documented_acquisition');
+  await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).fill('3.00');
+  await review.getByRole('button', { name: 'Salva rettifica', exact: true }).click();
+  assert.equal(await review.locator('img').count(), 0, 'HTML-like source labels must remain text in the preview.');
+  assert.equal(await page.evaluate(() => window.__exchangeXss === true), false);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'The review must not make the application wider than a mobile viewport.');
+  await page.locator('#import-dialog').evaluate(dialog => { dialog.scrollTop = 0; });
+  await page.screenshot({ path: resolve(artifacts, 'exchange-' + label + '-wizard.png') });
+  const preview = review.locator('.exchange-review-preview');
+  await preview.scrollIntoViewIfNeeded();
+  await page.screenshot({ path: resolve(artifacts, 'exchange-' + label + '-source-preview.png') });
+  await page.locator('#confirm-import').click();
+  await page.locator('#import-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#tax-year').selectOption('2025');
+  await page.locator('#asset-filter').fill('');
+  assert.equal(await page.locator('#ledger-content tbody tr').count(), 6, 'All six source rows must survive conversion.');
+  assert.match(await page.locator('#metric-net').textContent(), /86,67 €/);
+  assert.match(await page.locator('#metric-tax').textContent(), /22,53 €/);
+  assert.match(await page.locator('#metric-cost').textContent(), /81,67 €/,
+    'The residual basis must retain the original lot and the separately documented reward cost.');
+  await page.screenshot({ path: resolve(artifacts, 'exchange-' + label + '-result.png'), fullPage: true });
+  const exported = await downloadSession(page, 'exchange-' + label + '-canonical-v2');
+  const snapshot = parseCsv(exported);
+  assert.equal(snapshot.version, 2);
+  assert.deepEqual(snapshot.initialLots, initial.initialLots, 'Replacement of operations must preserve historical opening lots.');
+  assert.equal(snapshot.transactions.length, 6);
+  for (const source of exchangeSource) {
+    const converted = snapshot.transactions.find(row => row.id === source.id);
+    assert.ok(converted, 'Source id must remain recoverable: ' + source.id);
+    assert.deepEqual(converted.source.values, source, 'Every one of the 17 source fields must survive canonical export.');
+    assert.equal(converted.fees, '0', 'Included fees must not be applied twice.');
+  }
+  const swap = snapshot.transactions.find(row => row.id === 'exchange-swap');
+  assert.equal(swap.type, 'permuta_neutrale');
+  assert.equal(swap.lotDatePolicy, 'historical');
+  assert.equal(swap.source.decisions.swapTaxTreatment, 'neutral');
+  const reward = snapshot.transactions.find(row => row.id === 'exchange-reward');
+  assert.equal(reward.type, 'provento');
+  assert.equal(reward.totalEur, '20.00');
+  assert.equal(reward.rewardCostEur, '7.00');
+  assert.equal(reward.quantity, '0.500000000000000001');
+  assert.equal(reward.source.decisions.rewardCostPolicy, 'manual');
+  assert.equal(reward.source.decisions.amountsPolicy, 'manual');
+  const cashback = snapshot.transactions.find(row => row.id === 'exchange-cashback');
+  assert.equal(cashback.type, 'acquisto');
+  assert.equal(cashback.totalEur, '3.00');
+  assert.equal(cashback.source.values.received_value_EUR, '9.00');
+  assert.equal(cashback.source.decisions.rewardTreatment, 'documented_acquisition');
+  assert.equal(Object.hasOwn(cashback, 'rewardCostEur'), false);
+  await importDataset(page, snapshot, '', 6);
+  await page.locator('#tax-year').selectOption('2025');
+  assert.equal(await downloadSession(page, 'exchange-' + label + '-canonical-reimported'), exported,
+    'Canonical v2 reimport must preserve all raw data, classifications and documented reward costs.');
+  assert.match(await page.locator('#metric-tax').textContent(), /22,53 €/);
+  results.push({ name: 'exchange-csv-' + label, operations: 6, format: '17 source columns → canonical v2',
+    incompleteReviewBlocked: true, unsupportedTypeBlocked: true, manualRewardCostRequired: true, sourceRoundTripVerified: true });
+  console.log(`PASS exchange-csv-${label}: explicit review, neutral swap, mixed EARN classifications and canonical v2 round trip.`);
+}
+
 try {
   await waitForServer();
   browser = await chromium.launch({ channel: 'chrome', headless: true, timeout: 20000 });
@@ -239,9 +376,9 @@ try {
   await exportPdf(page, 'mixed-2026', 5, 2026, pdf => {
     assert.match(pdf.normalized, /anno 2026/);
     assert.match(pdf.normalized, /33%/);
-    assert.match(pdf.normalized, /6,60 €/);
+    assert.match(pdf.normalized, /8,25 €/);
     assert.match(pdf.normalized, /Plusvalenza\s+\+50,00 €/);
-    assert.match(pdf.normalized, /Plusvalenza\s+\+45,00 €/);
+    assert.equal(occurrences(pdf.normalized, 'Plusvalenza +50,00 €'), 2, 'Cash commissions must not reduce fiscal gains.');
     assert.match(pdf.normalized, /Minusvalenza\s+[-−]25,00 €/);
     assert.match(pdf.normalized, /Pareggio\s+0,00 €/);
     assert.match(pdf.normalized, /Nessun realizzo/);
@@ -254,7 +391,7 @@ try {
     assert.match(pdf.normalized, /anno 2025/);
     assert.match(pdf.normalized, /26%/);
     assert.match(pdf.normalized, /13,00 €/);
-    assert.doesNotMatch(pdf.normalized, /6,60 €/);
+    assert.doesNotMatch(pdf.normalized, /8,25 €/);
   });
 
   await importDataset(page, longHistory, 'ASSET249', 1);
@@ -286,6 +423,15 @@ try {
     assert.ok(raw.includes('999.999.999.999.999.999.999.999.999.999,12€'), 'The whole large amount must be readable, including its cents.');
     assert.ok(raw.includes('329.999.999.999.999.999.999.999.999.999,71€'), 'The large tax total must be readable.');
     assert.ok(raw.includes(hugeAsset), 'The maximum-length asset name must not be truncated.');
+  });
+  await verifyExchangeImport(page, 'mobile');
+  await verifyExchangeImport(desktop, 'desktop');
+  await exportPdf(desktop, 'exchange-csv-v2', 6, 2025, pdf => {
+    assert.match(pdf.normalized, /22,53 €/);
+    assert.match(pdf.normalized, /Permuta neutrale/);
+    assert.match(pdf.normalized, /Provento da detenzione/);
+    assert.match(pdf.normalized, /Nessun realizzo; costo storico trasferito/);
+    assert.match(pdf.normalized, /Provento imponibile 20,00 €/);
   });
   assert.deepEqual(errors, [], 'The browser must not report JavaScript errors.');
   assert.deepEqual(externalRequests, [], 'PDF export must not send requests outside the local application.');

@@ -4,6 +4,9 @@ const ZERO = Decimal.from('0');
 const MAX_ROWS = 5000;
 const YEARS = [2025, 2026];
 const VALID_TYPES = new Set(['acquisto', 'vendita']);
+const V2_TYPES = new Set([...VALID_TYPES, 'permuta_neutrale', 'permuta_imponibile', 'provento', 'deposito_eur']);
+const EXCHANGE_TYPES = new Set(['permuta_neutrale', 'permuta_imponibile']);
+const EXTENDED_FIELDS = ['totalEur', 'rewardCostEur', 'receivedAsset', 'receivedQuantity', 'lotDatePolicy'];
 const decimalPattern = /^\d{1,30}(?:\.\d{1,18})?$/;
 const unsafeText = /^[\s\uFEFF]*[=+\-@]/u;
 const controlCharacters = /[\u0000-\u001f\u007f-\u009f]/u;
@@ -34,7 +37,7 @@ export function validateDataset(data) {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     return [{ location: 'dataset', message: 'Il dataset deve essere un oggetto.' }];
   }
-  if (data.version !== 1) report('version', 'Versione del formato non supportata: usa 1.');
+  if (data.version !== 1 && data.version !== 2) report('version', 'Versione del formato non supportata: usa 1 oppure 2.');
   const openingValid = isDate(data.openingDate) && data.openingDate >= '2025-01-01' && data.openingDate <= '2026-12-31';
   if (!openingValid) report('openingDate', 'La data di apertura deve essere compresa tra 2025-01-01 e 2026-12-31.');
   const collections = ['initialLots', 'transactions', 'carryLosses'];
@@ -106,28 +109,70 @@ export function validateDataset(data) {
     const dateValid = isDate(transaction.date) && transaction.date >= '2025-01-01' && transaction.date <= '2026-12-31'
       && (!openingValid || transaction.date >= data.openingDate);
     if (!dateValid) report(location + '.date', 'La data deve ricadere nel 2025 o 2026 e non precedere l’apertura.');
-    if (!VALID_TYPES.has(transaction.type)) report(location + '.type', 'Usa acquisto oppure vendita.');
+    const typeValid = (data.version === 2 ? V2_TYPES : VALID_TYPES).has(transaction.type);
+    if (!typeValid) report(location + '.type', data.version === 2
+      ? 'Usa acquisto, vendita, permuta_neutrale, permuta_imponibile, provento oppure deposito_eur.'
+      : 'Il formato 1 supporta soltanto acquisto e vendita.');
     if (!isAsset(transaction.asset)) report(location + '.asset', 'Usa un nome asset maiuscolo, senza spazi iniziali o finali, fino a 50 caratteri.');
     if (!isOrder(transaction.order)) report(location + '.order', 'L’ordine deve essere un intero non negativo.');
     const quantity = checkAmount(transaction.quantity, location + '.quantity', true);
-    checkAmount(transaction.unitPrice, location + '.unitPrice');
-    checkAmount(transaction.fees, location + '.fees');
+    const price = checkAmount(transaction.unitPrice, location + '.unitPrice');
+    const fees = checkAmount(transaction.fees, location + '.fees');
+    const exchange = EXCHANGE_TYPES.has(transaction.type);
+    let receivedQuantity = null;
+    for (const field of EXTENDED_FIELDS) {
+      if (Object.hasOwn(transaction, field) && data.version !== 2) report(location + '.' + field, 'Questo campo richiede il formato 2.');
+    }
+    if (Object.hasOwn(transaction, 'totalEur')) checkAmount(transaction.totalEur, location + '.totalEur');
+    if (transaction.type === 'provento' || transaction.type === 'permuta_imponibile') {
+      if (!Object.hasOwn(transaction, 'totalEur')) report(location + '.totalEur', 'Indica il controvalore lordo effettivo in euro.');
+    }
+    if (transaction.type === 'provento') {
+      checkAmount(transaction.rewardCostEur, location + '.rewardCostEur');
+    } else if (Object.hasOwn(transaction, 'rewardCostEur')) report(location + '.rewardCostEur', 'Il costo fiscale documentato è previsto soltanto per i proventi.');
+    if (exchange) {
+      if (!isAsset(transaction.receivedAsset)) report(location + '.receivedAsset', 'Indica un asset ricevuto valido e maiuscolo.');
+      else if (transaction.receivedAsset === transaction.asset) report(location + '.receivedAsset', 'L’asset ricevuto deve essere diverso dall’asset ceduto.');
+      receivedQuantity = checkAmount(transaction.receivedQuantity, location + '.receivedQuantity', true);
+    } else {
+      for (const field of ['receivedAsset', 'receivedQuantity']) {
+        if (Object.hasOwn(transaction, field)) report(location + '.' + field, 'Questo campo è previsto soltanto per le permute.');
+      }
+    }
+    if (transaction.type === 'permuta_neutrale') {
+      if (transaction.lotDatePolicy !== 'historical' && transaction.lotDatePolicy !== 'exchange') {
+        report(location + '.lotDatePolicy', 'Scegli esplicitamente historical oppure exchange per la data dei lotti ricevuti.');
+      }
+      if (Object.hasOwn(transaction, 'totalEur')) report(location + '.totalEur', 'La permuta neutrale trasferisce il costo storico: il controvalore non è un corrispettivo fiscale.');
+    } else if (Object.hasOwn(transaction, 'lotDatePolicy')) report(location + '.lotDatePolicy', 'La scelta della data dei lotti è prevista soltanto per le permute neutrali.');
+    if (typeValid && !VALID_TYPES.has(transaction.type)) {
+      if (fees && fees.cmp(ZERO) !== 0) report(location + '.fees', 'Per questa operazione usa commissioni 0: le quantità importate sono già effettive.');
+      const expectedPrice = transaction.type === 'deposito_eur' ? '1' : '0';
+      if (price && price.cmp(expectedPrice) !== 0) report(location + '.unitPrice', 'Per questa operazione il prezzo unitario deve essere ' + expectedPrice + '.');
+    }
+    if (transaction.type === 'deposito_eur' && transaction.asset !== 'EUR') report(location + '.asset', 'Il deposito in euro deve avere asset EUR.');
     if (isDate(transaction.date) && isOrder(transaction.order)) {
       const key = JSON.stringify([transaction.date, transaction.order]);
       if (transactionKeys.has(key)) report(location + '.order', 'Ordine duplicato nella stessa data: assegna ordini distinti.');
       transactionKeys.add(key);
     }
-    if (dateValid && isOrder(transaction.order) && VALID_TYPES.has(transaction.type) && isAsset(transaction.asset) && quantity) {
-      goodTransactions.push({ ...transaction, quantityDecimal: quantity, location });
+    if (dateValid && isOrder(transaction.order) && typeValid && isAsset(transaction.asset) && quantity
+      && (!exchange || isAsset(transaction.receivedAsset) && transaction.receivedAsset !== transaction.asset && receivedQuantity)) {
+      goodTransactions.push({ ...transaction, quantityDecimal: quantity, receivedQuantityDecimal: receivedQuantity, location });
     }
   });
 
   goodTransactions.sort(chronological).forEach(transaction => {
     const balance = balances.get(transaction.asset) || ZERO;
-    if (transaction.type === 'acquisto') balances.set(transaction.asset, balance.add(transaction.quantityDecimal));
+    if (transaction.type === 'deposito_eur') return;
+    if (transaction.type === 'acquisto' || transaction.type === 'provento') balances.set(transaction.asset, balance.add(transaction.quantityDecimal));
     else if (balance.cmp(transaction.quantityDecimal) < 0) {
-      report(transaction.location + '.quantity', 'Vendita superiore alla disponibilità: ' + balance.toString() + ' ' + transaction.asset + '.');
-    } else balances.set(transaction.asset, balance.sub(transaction.quantityDecimal));
+      report(transaction.location + '.quantity', 'Cessione superiore alla disponibilità: ' + balance.toString() + ' ' + transaction.asset + '.');
+    } else {
+      balances.set(transaction.asset, balance.sub(transaction.quantityDecimal));
+      if (EXCHANGE_TYPES.has(transaction.type)) balances.set(transaction.receivedAsset,
+        (balances.get(transaction.receivedAsset) || ZERO).add(transaction.receivedQuantityDecimal));
+    }
   });
 
   data.carryLosses.forEach((loss, index) => {
@@ -156,6 +201,9 @@ function calculateTax(data, calculatedRows, selectedYear) {
     const yearResults = calculatedRows.filter(row => row.date.startsWith(String(year)) && row.fiscalResult !== null)
       .map(row => row.exactFiscalResult);
     const gains = sum(yearResults.filter(value => value.cmp(ZERO) > 0));
+    const income = sum(calculatedRows.filter(row => row.date.startsWith(String(year)) && row.fiscalKind === 'income')
+      .map(row => row.exactFiscalResult));
+    const capitalGains = gains.sub(income);
     const losses = ZERO.sub(sum(yearResults.filter(value => value.cmp(ZERO) < 0)));
     const net = gains.sub(losses);
     const currentLoss = ZERO.sub(net).max(ZERO);
@@ -171,12 +219,12 @@ function calculateTax(data, calculatedRows, selectedYear) {
     if (currentLoss.cmp(ZERO) > 0) available.push({ originYear: year, amount: currentLoss });
     const rate = year === 2025 ? 26 : 33;
     result = {
-      year, rate, gains: gains.toString(), losses: losses.toString(), net: net.toString(),
+      year, rate, gains: gains.toString(), capitalGains: capitalGains.toString(), income: income.toString(), losses: losses.toString(), net: net.toString(),
       currentLoss: currentLoss.toString(), lossesUsed: lossesUsed.toString(), taxable: taxable.toString(),
       tax: taxable.mul(String(rate)).div('100').toFixed(2),
       // Format from the exact values: formatting the serialized 18-place values
       // again can cross a half-cent boundary and introduce a second rounding.
-      display: { gains: gains.toFixed(2), losses: losses.toFixed(2), net: net.toFixed(2),
+      display: { gains: gains.toFixed(2), capitalGains: capitalGains.toFixed(2), income: income.toFixed(2), losses: losses.toFixed(2), net: net.toFixed(2),
         lossesUsed: lossesUsed.toFixed(2), taxable: taxable.toFixed(2) },
       remainingLosses: available.map(formatLoss), expiredLosses: expired.map(formatLoss),
     };
@@ -193,72 +241,147 @@ export function calculate(data, selectedYear = typeof data?.openingDate === 'str
   }
   if (errors.length) throw new ValidationError(errors);
   const portfolios = new Map();
+  let lotSequence = 0;
   const getHolding = asset => {
     if (!portfolios.has(asset)) portfolios.set(asset, { asset, quantity: ZERO, cost: ZERO, fiscalCost: ZERO, lots: [] });
     return portfolios.get(asset);
   };
-  for (const initial of data.initialLots) {
-    const holding = getHolding(initial.asset);
-    const quantity = Decimal.from(initial.quantity);
-    const unitCost = Decimal.from(initial.unitCost);
-    const cost = quantity.mul(unitCost);
+  const addLot = (holding, { id, acquiredOn, order, quantity, fiscalCost, managementCost, initial = false, provenance }) => {
     holding.quantity = holding.quantity.add(quantity);
-    holding.cost = holding.cost.add(cost);
-    holding.fiscalCost = holding.fiscalCost.add(cost);
-    holding.lots.push({ id: initial.id, acquiredOn: initial.acquiredOn, order: initial.order, quantity, unitCost, initial: true });
+    holding.cost = holding.cost.add(managementCost);
+    holding.fiscalCost = holding.fiscalCost.add(fiscalCost);
+    // A separate unique sequence also distinguishes the portions of a single
+    // neutral exchange without altering the public transaction order.
+    holding.lots.push({ id, acquiredOn, order, quantity, unitCost: fiscalCost.div(quantity),
+      initial, lotSequence: lotSequence++, provenance });
+  };
+  const consumeLots = (holding, quantity) => {
+    const managementCost = average(holding.cost, holding.quantity).mul(quantity);
+    let remaining = quantity;
+    let fiscalCost = ZERO;
+    const pieces = [];
+    // Opening holdings precede purchases on the opening date. Historical neutral
+    // transfers retain the acquisition date and the source lot's relative order.
+    holding.lots.sort((left, right) => right.acquiredOn.localeCompare(left.acquiredOn)
+      || Number(left.initial) - Number(right.initial) || right.order - left.order || right.lotSequence - left.lotSequence);
+    for (const lot of holding.lots) {
+      if (remaining.cmp(ZERO) === 0) break;
+      const used = lot.quantity.min(remaining);
+      if (used.cmp(ZERO) === 0) continue;
+      const cost = used.mul(lot.unitCost);
+      fiscalCost = fiscalCost.add(cost);
+      pieces.push({ ...lot, quantity: used, cost });
+      lot.quantity = lot.quantity.sub(used);
+      remaining = remaining.sub(used);
+    }
+    holding.lots = holding.lots.filter(lot => lot.quantity.cmp(ZERO) > 0);
+    holding.quantity = holding.quantity.sub(quantity);
+    holding.cost = holding.quantity.cmp(ZERO) === 0 ? ZERO : holding.cost.sub(managementCost);
+    holding.fiscalCost = holding.quantity.cmp(ZERO) === 0 ? ZERO : holding.fiscalCost.sub(fiscalCost);
+    return { fiscalCost, managementCost, pieces };
+  };
+  for (const initial of data.initialLots) {
+    const quantity = Decimal.from(initial.quantity);
+    const cost = quantity.mul(initial.unitCost);
+    addLot(getHolding(initial.asset), { id: initial.id, acquiredOn: initial.acquiredOn, order: initial.order,
+      quantity, fiscalCost: cost, managementCost: cost, initial: true });
   }
   const calculatedRows = [];
   for (const transaction of [...data.transactions].sort(chronological)) {
-    const holding = getHolding(transaction.asset);
+    const fiat = transaction.type === 'deposito_eur';
+    const holding = fiat ? { quantity: ZERO, cost: ZERO, fiscalCost: ZERO } : getHolding(transaction.asset);
     const quantity = Decimal.from(transaction.quantity);
     const price = Decimal.from(transaction.unitPrice);
     const fees = Decimal.from(transaction.fees);
+    const total = Object.hasOwn(transaction, 'totalEur') ? Decimal.from(transaction.totalEur) : quantity.mul(price);
     const beforeQuantity = holding.quantity;
     const beforeAverage = average(holding.cost, holding.quantity);
     const fiscalBeforeAverage = average(holding.fiscalCost, holding.quantity);
-    const lotDetails = [];
+    let lotDetails = [];
     let proceeds = null;
-    let costBasis;
+    let managementProceeds = null;
+    let costBasis = ZERO;
+    let managementCostBasis = ZERO;
     let fiscalResult = null;
     let managementResult = null;
+    let fiscalKind = 'none';
+    let received = null;
     if (transaction.type === 'acquisto') {
-      costBasis = quantity.mul(price).add(fees);
-      holding.quantity = holding.quantity.add(quantity);
-      holding.cost = holding.cost.add(costBasis);
-      holding.fiscalCost = holding.fiscalCost.add(costBasis);
-      holding.lots.push({ id: transaction.id, acquiredOn: transaction.date, order: transaction.order, quantity, unitCost: costBasis.div(quantity), initial: false });
+      // Article 68(9-bis), as interpreted in Circular 30/E: fees affect the
+      // management balance but do not increase the deductible fiscal basis.
+      costBasis = total;
+      managementCostBasis = total.add(fees);
+      addLot(holding, { id: transaction.id, acquiredOn: transaction.date, order: transaction.order,
+        quantity, fiscalCost: costBasis, managementCost: managementCostBasis });
+    } else if (transaction.type === 'provento') {
+      proceeds = total;
+      fiscalResult = total;
+      fiscalKind = 'income';
+      costBasis = Decimal.from(transaction.rewardCostEur);
+      managementCostBasis = total;
+      addLot(holding, { id: transaction.id, acquiredOn: transaction.date, order: transaction.order,
+        quantity, fiscalCost: costBasis, managementCost: managementCostBasis });
+    } else if (fiat) {
+      fiscalKind = 'fiat';
     } else {
-      proceeds = quantity.mul(price).sub(fees);
-      let remaining = quantity;
-      costBasis = ZERO;
-      // Opening holdings precede all transactions, including purchases on the opening day.
-      holding.lots.sort((left, right) => right.acquiredOn.localeCompare(left.acquiredOn)
-        || Number(left.initial) - Number(right.initial) || right.order - left.order);
-      for (const lot of holding.lots) {
-        if (remaining.cmp(ZERO) === 0) break;
-        const used = lot.quantity.min(remaining);
-        if (used.cmp(ZERO) === 0) continue;
-        const cost = used.mul(lot.unitCost);
-        costBasis = costBasis.add(cost);
-        lotDetails.push({ lotId: lot.id, acquiredOn: lot.acquiredOn, order: lot.order, quantity: used.toString(), unitCost: lot.unitCost.toString(), cost: cost.toString() });
-        lot.quantity = lot.quantity.sub(used);
-        remaining = remaining.sub(used);
+      const consumed = consumeLots(holding, quantity);
+      costBasis = consumed.fiscalCost;
+      managementCostBasis = consumed.managementCost;
+      lotDetails = consumed.pieces.map(piece => ({ lotId: piece.id, acquiredOn: piece.acquiredOn, order: piece.order,
+        lotSequence: piece.lotSequence, quantity: piece.quantity.toString(), unitCost: piece.unitCost.toString(), cost: piece.cost.toString(),
+        ...(piece.provenance ? { provenance: structuredClone(piece.provenance) } : {}) }));
+      if (transaction.type === 'permuta_neutrale') {
+        fiscalKind = 'neutral';
+        const target = getHolding(transaction.receivedAsset);
+        const receivedQuantity = Decimal.from(transaction.receivedQuantity);
+        const receivedBeforeQuantity = target.quantity;
+        for (const piece of consumed.pieces) {
+          const portion = piece.quantity.div(quantity);
+          const historical = transaction.lotDatePolicy === 'historical';
+          addLot(target, { id: transaction.id, acquiredOn: historical ? piece.acquiredOn : transaction.date,
+            order: historical ? piece.order : transaction.order, initial: historical && piece.initial,
+            quantity: receivedQuantity.mul(portion), fiscalCost: piece.cost, managementCost: managementCostBasis.mul(portion),
+            provenance: { lotId: piece.id, acquiredOn: piece.acquiredOn, order: piece.order,
+              asset: transaction.asset, originLotId: piece.provenance?.originLotId ?? piece.id,
+              originAcquiredOn: piece.provenance?.originAcquiredOn ?? piece.acquiredOn,
+              originOrder: piece.provenance?.originOrder ?? piece.order,
+              originAsset: piece.provenance?.originAsset ?? transaction.asset } });
+        }
+        received = { receivedAsset: transaction.receivedAsset, receivedQuantity: receivedQuantity.toString(),
+          receivedBeforeQuantity: receivedBeforeQuantity.toString(), receivedAfterQuantity: target.quantity.toString(),
+          receivedBeforeAverage: average(target.cost.sub(managementCostBasis), receivedBeforeQuantity).toString(),
+          receivedAfterAverage: average(target.cost, target.quantity).toString(), lotDatePolicy: transaction.lotDatePolicy };
+      } else {
+        proceeds = total;
+        managementProceeds = total.sub(fees);
+        fiscalResult = proceeds.sub(costBasis);
+        managementResult = managementProceeds.sub(managementCostBasis);
+        fiscalKind = 'capital_gain';
+        if (transaction.type === 'permuta_imponibile') {
+          const target = getHolding(transaction.receivedAsset);
+          const receivedQuantity = Decimal.from(transaction.receivedQuantity);
+          const receivedBeforeQuantity = target.quantity;
+          const receivedBeforeAverage = average(target.cost, target.quantity);
+          addLot(target, { id: transaction.id, acquiredOn: transaction.date, order: transaction.order,
+            quantity: receivedQuantity, fiscalCost: total, managementCost: total });
+          received = { receivedAsset: transaction.receivedAsset, receivedQuantity: receivedQuantity.toString(),
+            receivedBeforeQuantity: receivedBeforeQuantity.toString(), receivedAfterQuantity: target.quantity.toString(),
+            receivedBeforeAverage: receivedBeforeAverage.toString(), receivedAfterAverage: average(target.cost, target.quantity).toString() };
+        }
       }
-      holding.lots = holding.lots.filter(lot => lot.quantity.cmp(ZERO) > 0);
-      holding.fiscalCost = holding.fiscalCost.sub(costBasis);
-      const managementCost = beforeAverage.mul(quantity);
-      fiscalResult = proceeds.sub(costBasis);
-      managementResult = proceeds.sub(managementCost);
-      holding.quantity = holding.quantity.sub(quantity);
-      holding.cost = holding.quantity.cmp(ZERO) === 0 ? ZERO : holding.cost.sub(managementCost);
     }
     calculatedRows.push({
       id: transaction.id, date: transaction.date, asset: transaction.asset, type: transaction.type, order: transaction.order,
       quantity: quantity.toString(), unitPrice: price.toString(), fees: fees.toString(),
+      ...(Object.hasOwn(transaction, 'totalEur') ? { totalEur: transaction.totalEur } : {}),
+      ...(Object.hasOwn(transaction, 'rewardCostEur') ? { rewardCostEur: transaction.rewardCostEur } : {}),
+      ...(Object.hasOwn(transaction, 'source') ? { source: structuredClone(transaction.source) } : {}),
+      ...(received || {}), fiscalKind,
       beforeQuantity: beforeQuantity.toString(), beforeAverage: beforeAverage.toString(),
       afterQuantity: holding.quantity.toString(), afterAverage: average(holding.cost, holding.quantity).toString(),
       fiscalBeforeAverage: fiscalBeforeAverage.toString(), fiscalAfterAverage: average(holding.fiscalCost, holding.quantity).toString(),
       proceeds: proceeds?.toString() ?? null, costBasis: costBasis.toString(),
+      managementProceeds: managementProceeds?.toString() ?? null, managementCostBasis: managementCostBasis.toString(),
       fiscalResult: fiscalResult?.toString() ?? null, managementResult: managementResult?.toString() ?? null,
       display: { proceeds: proceeds?.toFixed(2) ?? null, costBasis: costBasis.toFixed(2),
         fiscalResult: fiscalResult?.toFixed(2) ?? null, fiscalSign: fiscalResult?.cmp(ZERO) ?? null },

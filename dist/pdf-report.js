@@ -21,8 +21,15 @@ const pair = (label, value) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHt
 
 function fiscalLabel(row) {
   if (row.type === 'acquisto') return 'Nessun realizzo';
+  if (row.type === 'permuta_neutrale') return 'Nessun realizzo; costo storico trasferito';
+  if (row.type === 'deposito_eur') return 'Informativo, nessun reddito';
   const value = Decimal.from(row.display?.fiscalResult ?? row.fiscalResult);
   const sign = row.display?.fiscalSign ?? value.cmp('0');
+  if (row.type === 'provento') {
+    return sign > 0 && Decimal.from(value.toFixed(2)).cmp('0') === 0
+      ? 'Provento imponibile inferiore a 0,005 €'
+      : 'Provento imponibile ' + money(value);
+  }
   if (sign !== 0 && Decimal.from(value.toFixed(2)).cmp('0') === 0) {
     return (sign > 0 ? 'Plusvalenza' : 'Minusvalenza') + ' inferiore a 0,005 €';
   }
@@ -31,15 +38,21 @@ function fiscalLabel(row) {
   return 'Pareggio 0,00 €';
 }
 
+const OPERATION_LABELS = Object.freeze({
+  acquisto: 'Acquisto', vendita: 'Vendita', permuta_neutrale: 'Permuta neutrale',
+  permuta_imponibile: 'Permuta imponibile', provento: 'Provento da detenzione', deposito_eur: 'Deposito EUR',
+});
+
 function operationValues(row) {
+  const exchange = row.type === 'permuta_neutrale' || row.type === 'permuta_imponibile';
   return [
     `${dateLabel(row.date)}\nSequenza ${row.order}`,
-    String(row.asset),
-    row.type === 'acquisto' ? 'Acquisto' : 'Vendita',
-    quantity(row.quantity),
+    exchange ? `${row.asset} / ${row.receivedAsset}` : String(row.asset),
+    OPERATION_LABELS[row.type] ?? String(row.type),
+    exchange ? `Ceduta: ${quantity(row.quantity)} ${row.asset}\nRicevuta: ${quantity(row.receivedQuantity)} ${row.receivedAsset}` : quantity(row.quantity),
     money(row.fees),
-    row.type === 'acquisto' ? '—' : money(row.display?.proceeds ?? row.proceeds),
-    money(row.display?.costBasis ?? row.costBasis),
+    row.proceeds === null || row.proceeds === undefined ? '—' : money(row.display?.proceeds ?? row.proceeds),
+    row.type === 'deposito_eur' ? '—' : money(row.display?.costBasis ?? row.costBasis),
     fiscalLabel(row)
   ];
 }
@@ -59,8 +72,10 @@ export function buildPdfReportData(result, openingDate) {
   const { rows, tax } = result;
   const dates = rows.map(row => row.date).sort();
   const span = dates.length ? `Periodo delle operazioni: ${dateLabel(dates[0])} – ${dateLabel(dates.at(-1))}.` : 'Nessuna operazione inserita.';
+  const hasHoldingIncome = rows.some(row => row.type === 'provento');
   const summary = [
-    ['Plusvalenze', money(tax.display?.gains ?? tax.gains)],
+    ['Plusvalenze', money(tax.display?.capitalGains ?? tax.capitalGains ?? tax.display?.gains ?? tax.gains)],
+    ...(hasHoldingIncome ? [['Proventi da detenzione', money(tax.display?.income ?? tax.income ?? '0')]] : []),
     ['Minusvalenze', money(tax.display?.losses ?? tax.losses)],
     ['Risultato netto', money(tax.display?.net ?? tax.net)],
     ['Minusvalenze pregresse utilizzate', money(tax.display?.lossesUsed ?? tax.lossesUsed)],
@@ -78,15 +93,17 @@ export function buildPdfReportData(result, openingDate) {
     ],
     summaryTitle: 'Riepilogo fiscale · anno ' + tax.year,
     scope: [
-      'Perimetro: persone fisiche residenti in Italia, fuori dall’attività d’impresa, in regime dichiarativo; compravendite di cripto-attività ordinarie contro euro.',
+      'Perimetro: persone fisiche residenti in Italia, fuori dall’attività d’impresa, in regime dichiarativo; compravendite di cripto-attività ordinarie contro euro, permute classificate esplicitamente e proventi da detenzione.',
       `Il riepilogo fiscale comprende solo l’anno ${tax.year} selezionato. Il calcolo considera le minusvalenze utilizzabili riportate dagli anni precedenti.`
     ],
     summary,
     warnings: result.warnings.map(String),
-    columns: ['Data / sequenza', 'Crypto', 'Tipo', 'Quantità', 'Commissioni (€)', 'Ricavo netto (€)', 'Costo acquisto / LIFO (€)', 'Risultato fiscale (€)'],
+    columns: ['Data / sequenza', 'Crypto', 'Tipo', 'Quantità', 'Commissioni (€)', 'Corrispettivo / provento lordo (€)', 'Costo fiscale / trasferito (€)', 'Risultato fiscale (€)'],
     rows: rows.map(operationValues),
     notes: [
-      'Gli acquisti non realizzano plusvalenze o minusvalenze. Per le vendite il risultato fiscale è il ricavo netto, al netto delle commissioni, meno il costo attribuito con il metodo LIFO. Il costo di acquisto include le commissioni.',
+      'Gli acquisti non realizzano plusvalenze o minusvalenze. Per vendite e permute imponibili il risultato fiscale è il corrispettivo lordo o il valore normale ricevuto meno il costo fiscale attribuito con il metodo LIFO. Le commissioni incidono sulla gestione del portafoglio, ma non aumentano il costo fiscale e non riducono il corrispettivo fiscale.',
+      'Sono neutrali soltanto le permute tra cripto-attività con eguali caratteristiche e funzioni, secondo la classificazione confermata: non realizzano reddito e trasferiscono il costo storico ai lotti ricevuti. I depositi EUR sono informativi e non generano reddito.',
+      'I proventi da detenzione sono imponibili al lordo alla ricezione. Per i proventi, la colonna del costo fiscale indica il costo documentato da usare per una cessione successiva: non è una deduzione dal reddito ricevuto e non viene assunto automaticamente pari a zero.',
       'Gli importi sono arrotondati ai centesimi per la lettura. I totali fiscali sono calcolati con la precisione del motore: possono differire dalla somma degli importi arrotondati delle singole operazioni.'
     ],
     lossSections: lossSections(tax),
