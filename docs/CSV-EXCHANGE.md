@@ -48,7 +48,13 @@ L'anteprima è paginata e consente di rettificare i dati della singola riga. I t
 
 Il CSV non prova un saldo iniziale nullo né un costo fiscale zero. Inserire nella situazione iniziale i lotti residui documentati prima della prima operazione, con costo fiscale esclusi gli oneri. I vecchi dati in cui le commissioni erano incorporate nei lotti iniziali richiedono una revisione manuale.
 
-L'anteprima e la conferma non eliminano la validazione del motore: date fuori dal 2025–2026, operazioni precedenti all'apertura, cessioni superiori alle quantità disponibili, duplicati e dati fiscali mancanti impediscono l'applicazione. Un errore lascia intatta la sessione in uso.
+L'anteprima distingue la lettura corretta del file dalle verifiche ancora da completare: il pulsante finale rimane disabilitato finché mancano scelte fiscali o dati necessari. Uno scarto di quantità può dipendere da lotti iniziali mancanti, movimenti omessi o dati errati; non certifica quanto fosse realmente posseduto all'apertura.
+
+Accanto a ogni crypto con saldo insufficiente, **Aggiungi un lotto di…** apre il modulo dei lotti conservando file, pagina, classificazioni e rettifiche già salvate. È precompilato soltanto l'asset: quantità, data originaria e costo devono essere inseriti dalla documentazione, con un lotto distinto per ogni acquisto originario. Una rettifica di riga ancora aperta va prima salvata o annullata.
+
+**Salva e ricalcola** nel modulo del lotto aggiorna subito la sessione e il controllo dei saldi. Il lotto resta nella sessione anche annullando poi l'importazione; **Annulla** nel modulo del lotto non aggiunge nulla. L'importazione delle operazioni rimane un'azione separata, applicata soltanto con **Importa e ricalcola**. Chiudere la finestra di importazione elimina le scelte non ancora applicate della revisione.
+
+La validazione del motore resta obbligatoria: date fuori dal 2025–2026, operazioni precedenti all'apertura, cessioni superiori alle quantità disponibili, duplicati e dati fiscali mancanti impediscono l'applicazione del CSV. Un errore non sostituisce le operazioni della sessione; gli errori del motore riferiti a operazioni importate riportano la riga della fonte originale, comprese le eventuali cessioni separate per commissioni.
 
 ## Export e privacy
 

@@ -12,7 +12,7 @@ const blankOptions = () => ({
 const decimalInput = value => value.trim().replace(',', '.');
 
 /** Explicit fiscal review of source data, kept only for the open import dialog. */
-export function createExchangeReview({ container, onChange = () => {} }) {
+export function createExchangeReview({ container, onChange = () => {}, onAddInitialLot = null }) {
   const doc = container.ownerDocument;
   const prefix = `exchange-review-${++reviewSequence}`;
   let parsed = null;
@@ -26,6 +26,7 @@ export function createExchangeReview({ container, onChange = () => {} }) {
   let rewardCostField = null;
   let balanceBox = null;
   let balanceDataset = null;
+  let initialSummary = null;
   let selectSequence = 0;
   container.hidden = true;
   container.classList.add('exchange-review');
@@ -57,6 +58,14 @@ export function createExchangeReview({ container, onChange = () => {} }) {
     if (lotPolicyField) lotPolicyField.hidden = !Object.values(options.swapTreatments).includes('neutral');
     if (rewardCostField) rewardCostField.hidden = !['holding_income', 'per_row'].includes(options.rewardsTreatment);
     renderBalanceCheck();
+  }
+  function updateInitialSummary() {
+    if (!initialSummary) return;
+    initialSummary.textContent = `Situazione attuale al ${balanceDataset?.openingDate || '—'}: ${balanceDataset?.initialLots?.length || 0} lotti iniziali, ${balanceDataset?.carryLosses?.length || 0} minusvalenze pregresse e ${balanceDataset?.transactions?.length || 0} operazioni. Il CSV non ricostruisce i costi o i movimenti precedenti mancanti.`;
+  }
+  function addInitialLot(asset) {
+    if (openEditorId !== null) { setErrors([UNSAVED_MESSAGE]); return; }
+    onAddInitialLot?.(asset);
   }
   function renderBalanceCheck() {
     if (!balanceBox || !parsed || !balanceDataset) return;
@@ -111,11 +120,17 @@ export function createExchangeReview({ container, onChange = () => {} }) {
         paragraph(balanceBox, 'Controllo preliminare delle quantità: il CSV non richiede ulteriori saldi iniziali per le operazioni esaminate. La verifica completa di dati e costi avviene prima dell’importazione.');
         return;
       }
-      paragraph(balanceBox, 'Verifica subito i lotti iniziali prima di classificare tutti i premi. Il CSV movimenta quantità non disponibili nella situazione attuale:', 'exchange-review-warning');
+      paragraph(balanceBox, 'Il file è leggibile, ma alcune uscite superano le quantità disponibili. Verifica i lotti iniziali e la completezza dei movimenti: possono mancare acquisti o trasferimenti, oppure esserci quantità o un ordine da correggere.', 'exchange-review-warning');
       const list = element('ul', 'exchange-review-balances');
-      for (const [asset, minimum] of missing) list.append(element('li', '', `Saldo iniziale insufficiente per ${asset}: mancano almeno ${zero.sub(minimum).toString()} ${asset}. Inserisci i lotti documentati prima di completare questa verifica.`));
+      for (const [asset, minimum] of missing) {
+        const item = element('li');
+        item.append(element('p', '', `${asset}: lo scarto massimo delle quantità è ${zero.sub(minimum).toString()} ${asset}. È un dato diagnostico, non la ricostruzione della quantità realmente posseduta all’apertura.`));
+        if (typeof onAddInitialLot === 'function') item.append(button(`Aggiungi un lotto di ${asset}`, () => addInitialLot(asset)));
+        list.append(item);
+      }
       balanceBox.append(list);
-      paragraph(balanceBox, 'Il controllo usa quantità nette, ordine cronologico e lotti attuali; non inventa costi o lotti. Le commissioni aggiuntive in una terza crypto sono incluse solo se confermate nella scelta dedicata.');
+      paragraph(balanceBox, 'Inserisci soltanto lotti effettivamente disponibili all’apertura, con quantità, data e costo documentati: il sito non compila questi dati usando lo scarto. Se mancano movimenti successivi, completa o correggi il file della piattaforma. Le commissioni aggiuntive in una terza crypto sono incluse solo se confermate nella scelta dedicata.');
+      if (typeof onAddInitialLot === 'function') paragraph(balanceBox, 'Puoi aggiungere i lotti senza chiudere questa verifica: le scelte già effettuate restano disponibili. «Salva e ricalcola» salva subito il lotto nella sessione, anche se poi annulli l’importazione. Le operazioni del CSV vengono applicate solo con «Importa e ricalcola».');
     } catch {
       paragraph(balanceBox, 'Il controllo preliminare dei saldi non è completo: alcuni importi richiedono verifica. L’importazione resta soggetta alla validazione completa.');
     }
@@ -335,14 +350,15 @@ export function createExchangeReview({ container, onChange = () => {} }) {
     errorsBox.replaceChildren();
     if (!errors.length) { errorsBox.hidden = true; return; }
     errorsBox.hidden = false;
-    errorsBox.append(element('strong', '', 'Controlla i dati prima di importare.'));
+    errorsBox.append(element('strong', '', 'Verifiche da completare prima di importare.'));
     const list = element('ul');
     for (const error of errors.slice(0, 10)) {
       const text = typeof error === 'string' ? error : `${error.line !== undefined && error.line !== null ? `Riga ${error.line}: ` : ''}${error.message || 'Dato da verificare.'}`;
       list.append(element('li', '', text));
     }
     errorsBox.append(list);
-    if (errors.length > 10) paragraph(errorsBox, `Altri ${errors.length - 10} errori: correggi i primi e verifica di nuovo.`);
+    paragraph(errorsBox, 'Le scelte fiscali ancora da confermare non indicano un errore nel formato del file. Completa le verifiche richieste; eventuali errori dei dati o delle quantità restano bloccanti.');
+    if (errors.length > 10) paragraph(errorsBox, `Altre ${errors.length - 10} verifiche da completare: risolvi le prime e controlla di nuovo.`);
   }
   function hide() {
     container.hidden = true;
@@ -352,7 +368,7 @@ export function createExchangeReview({ container, onChange = () => {} }) {
     options = blankOptions();
     page = 0;
     openEditorId = null;
-    errorsBox = preview = lotPolicyField = rewardCostField = balanceBox = balanceDataset = null;
+    errorsBox = preview = lotPolicyField = rewardCostField = balanceBox = balanceDataset = initialSummary = null;
   }
   function show(source, currentDataset) {
     hide();
@@ -373,7 +389,8 @@ export function createExchangeReview({ container, onChange = () => {} }) {
       ['replace', 'Sostituisci operazioni, conserva lotti e minusvalenze'],
       ['append', 'Aggiungi operazioni di altre date']
     ], options.mode, value => { options.mode = value; });
-    paragraph(initial, `Situazione attuale al ${currentDataset?.openingDate || '—'}: ${currentDataset?.initialLots?.length || 0} lotti iniziali, ${currentDataset?.carryLosses?.length || 0} minusvalenze pregresse e ${currentDataset?.transactions?.length || 0} operazioni. Il CSV non ricostruisce costi o lotti precedenti mancanti: inseriscili nella situazione iniziale.`);
+    initialSummary = paragraph(initial, '');
+    updateInitialSummary();
     checkbox(initial, 'Confermo data e ora come riportate nel CSV, senza conversione del fuso. A parità di secondo si mantiene l’ordine delle righe nel file.', 'dateConfirmed');
     balanceBox = element('div', 'exchange-review-balance-check');
     initial.append(balanceBox);
@@ -441,5 +458,11 @@ export function createExchangeReview({ container, onChange = () => {} }) {
       rewardCosts: Object.fromEntries(Object.entries(overrides).filter(([, values]) => values.rewardCostEur !== undefined).map(([id, values]) => [id, values.rewardCostEur]))
     };
   }
-  return { show, hide, getOptions, setErrors, get active() { return parsed !== null; } };
+  function updateDataset(currentDataset) {
+    if (!parsed) return;
+    balanceDataset = currentDataset;
+    updateInitialSummary();
+    renderBalanceCheck();
+  }
+  return { show, hide, getOptions, setErrors, updateDataset, get active() { return parsed !== null; } };
 }

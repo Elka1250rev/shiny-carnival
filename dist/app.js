@@ -25,11 +25,22 @@ const importSession = createImportSession((content, name) => {
 });
 let reviewedDataset = null;
 let reviewTimer;
+let addingImportLot = false;
 const exchangeReview = createExchangeReview({ container: $('exchange-review'), onChange: () => {
   reviewedDataset = null;
   $('confirm-import').disabled = true;
   clearTimeout(reviewTimer);
   reviewTimer = setTimeout(reviewExchange, 120);
+}, onAddInitialLot: asset => {
+  clearTimeout(reviewTimer);
+  reviewedDataset = null;
+  $('confirm-import').disabled = true;
+  addingImportLot = true;
+  openEntry('initialLots');
+  $('field-asset').value = asset;
+  // A quantity shortfall is not evidence of an acquisition date or tax cost.
+  $('field-acquiredOn').value = '';
+  $('entry-description').textContent += ' Il lotto viene salvato subito nella sessione, anche se annulli poi l’importazione. Il CSV sarà applicato solo dopo la conferma finale.';
 } });
 let confirmationAction = null;
 let toastTimer;
@@ -341,8 +352,10 @@ function reviewExchange() {
   $('confirm-import').disabled = true;
   const selection = importSession.pending;
   if (selection?.kind !== 'exchange' || !exchangeReview.active) return;
+  let candidate = null;
   try {
     const converted = convertExchangeCsv(selection.source, dataset, exchangeReview.getOptions());
+    candidate = converted.dataset;
     calculate(converted.dataset, Math.max(selectedYear, Number(converted.dataset.openingDate.slice(0, 4))));
     exportCsv(converted.dataset);
     reviewedDataset = converted.dataset;
@@ -352,7 +365,12 @@ function reviewExchange() {
     $('confirm-import').disabled = false;
   } catch (error) {
     $('import-preview').hidden = true;
-    const errors = error.errors?.map(entry => ({ ...entry, message: (entry.location ? friendlyLocation(entry.location) + ': ' : '') + entry.message })) || [error.message];
+    const errors = error.errors?.map(entry => {
+      const match = /^transactions\[(\d+)\]/.exec(entry.location || '');
+      const source = match && candidate?.transactions[Number(match[1])]?.source;
+      if (source) return { ...entry, line: source.line, message: (source.derived ? 'Commissione in terza crypto: ' : '') + entry.message };
+      return { ...entry, message: (entry.location ? friendlyLocation(entry.location) + ': ' : '') + entry.message };
+    }) || [error.message];
     exchangeReview.setErrors(errors);
   }
 }
@@ -385,6 +403,13 @@ $('tax-year').addEventListener('change', () => { pdfDownload.reset(); selectedYe
 $('asset-filter').addEventListener('input', renderLedger);
 $('add-button').addEventListener('click', () => openEntry(view === 'lots' ? 'initialLots' : view === 'losses' ? 'carryLosses' : 'transactions'));
 $('entry-form').addEventListener('submit', saveEntry);
+$('entry-dialog').addEventListener('close', () => {
+  if (!addingImportLot) return;
+  addingImportLot = false;
+  if (!exchangeReview.active || !$('import-dialog').open) return;
+  exchangeReview.updateDataset(dataset);
+  reviewExchange();
+});
 $('config-button').addEventListener('click', () => openEntry('config'));
 $('clear-button').addEventListener('click', () => confirm('Svuotare la sessione?', 'Tutti i dati inseriti verranno rimossi dalla pagina. Per conservarli, esporta il CSV prima di procedere.', () => { selectedYear = 2026; view = 'transactions'; $('asset-filter').value = ''; commit(freshDataset(), 'Sessione svuotata.'); }, 'Svuota sessione'));
 $('confirm-action').addEventListener('click', () => { $('confirm-dialog').close(); const action = confirmationAction; confirmationAction = null; action?.(); });

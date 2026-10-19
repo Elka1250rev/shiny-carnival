@@ -335,3 +335,80 @@ test('confirmed reward cost equality compares decimal spellings exactly without 
   assert.throws(() => convertExchangeCsv(input, dataset(), options({ ...common,
     overrides: { 'source-1': { rewardCostEur: '12.340000000000000001' } } })), /contraddice received_value_confirmed/);
 });
+
+test('a synthetic 1,401-row history needs documented opening holdings and survives full CSV recovery', () => {
+  // Invented movements and evidence: no user transactions or fiscal assumptions
+  // are copied into this fixture. Each cycle returns to the opening quantity.
+  const noFee = { fee_amount: '0', fee_currency: '', fee_value_EUR: '0' };
+  const rows = [sourceRow({ id: 'scale-deposit', datetime_tz_CET: '2025-01-01-09:00:00', type: 'Deposit',
+    sent_amount: '0', sent_currency: '', sent_value_EUR: '0',
+    received_amount: '10000.00', received_currency: 'EUR', received_value_EUR: '10000.00', ...noFee })];
+  const rewardTreatments = {};
+  const rewardCosts = {};
+  for (let cycle = 0; cycle < 175; cycle += 1) {
+    const date = new Date(Date.UTC(2025, 0, cycle + 2)).toISOString().slice(0, 10);
+    const movements = [
+      sourceRow({ type: 'Sell', sent_amount: '1.00', sent_currency: 'ALFA', sent_value_EUR: '15.00',
+        received_amount: '15.00', received_currency: 'EUR', received_value_EUR: '15.00',
+        fee_amount: '0.10', fee_currency: 'EUR', fee_value_EUR: '0.10' }),
+      sourceRow({ sent_amount: '30.00', sent_value_EUR: '30.00', received_amount: '3.00', received_value_EUR: '29.70',
+        fee_amount: '0.03', fee_currency: 'ALFA', fee_value_EUR: '0.30' }),
+      trade({ sent_amount: '2.00', sent_value_EUR: '20.00', received_amount: '4.00', received_value_EUR: '20.00',
+        fee_amount: '0.02', fee_currency: 'ALFA', fee_value_EUR: '0.20' }),
+      sourceRow({ type: 'Sell', sent_amount: '4.00', sent_currency: 'BETA', sent_value_EUR: '24.00',
+        received_amount: '24.00', received_currency: 'EUR', received_value_EUR: '24.00',
+        fee_amount: '0.10', fee_currency: 'EUR', fee_value_EUR: '0.10' }),
+      reward({ received_amount: '0.25', received_value_EUR: '2.50', ...noFee }),
+      reward({ received_amount: '0.25', received_value_EUR: '2.50', ...noFee }),
+      trade({ sent_amount: '0.50', sent_value_EUR: '5.00', received_amount: '1.00', received_value_EUR: '5.00',
+        fee_amount: '0.01', fee_currency: 'BETA', fee_value_EUR: '0.05' }),
+      sourceRow({ type: 'Sell', sent_amount: '1.00', sent_currency: 'BETA', sent_value_EUR: '6.00',
+        received_amount: '6.00', received_currency: 'EUR', received_value_EUR: '6.00',
+        fee_amount: '0.10', fee_currency: 'EUR', fee_value_EUR: '0.10' })
+    ];
+    movements.forEach((movement, position) => {
+      const id = `scale-${cycle}-${position}`;
+      rows.push({ ...movement, id, datetime_tz_CET: `${date}-12:00:0${position}`,
+        sent_address: `synthetic source ${cycle}, "account"`, received_address: 'synthetic destination' });
+      if (position === 4 || position === 5) {
+        rewardTreatments[id] = position === 4 ? 'holding_income' : 'documented_acquisition';
+        rewardCosts[id] = position === 4 ? '2.50' : '0.50';
+      }
+    });
+  }
+  const input = parsed(rows);
+  const reviewed = options({ swapTreatments: { 'ALFA→BETA': 'neutral' }, lotDatePolicy: 'historical',
+    rewardsTreatment: 'per_row', rewardTreatments, rewardCostPolicy: 'manual', rewardCosts });
+  const reviewedBefore = structuredClone(reviewed);
+  const sourceBefore = structuredClone(input);
+  assert.equal(input.rows.length, 1401);
+  assert.deepEqual(analyzeExchangeCsv(input).counts, { Deposit: 1, Sell: 525, Buy: 175, Trade: 350, Receive: 350 });
+
+  const empty = dataset();
+  const blocked = convertExchangeCsv(input, empty, reviewed).dataset;
+  assert.throws(() => calculate(blocked, 2025), error => error.errors.some(issue =>
+    issue.location === 'transactions[1].quantity' && issue.message.includes('disponibilità: 0 ALFA')));
+  assert.deepEqual(empty, dataset(), 'A failed import must leave the existing empty session intact.');
+
+  // This documented lot is an explicit part of the synthetic scenario. The
+  // importer must preserve it; it must never manufacture it from the deficit.
+  const documented = dataset({ initialLots: [{ id: 'scale-opening', asset: 'ALFA', acquiredOn: '2024-06-15',
+    order: 1, quantity: '1', unitCost: '8.00' }] });
+  const converted = convertExchangeCsv(input, documented, reviewed).dataset;
+  const result = calculate(converted, 2025);
+  assert.equal(result.rows.length, 1401);
+  assert.equal(result.holdings.find(holding => holding.asset === 'ALFA').quantity, '1');
+  assert.equal(result.holdings.find(holding => holding.asset === 'BETA').quantity, '0');
+  assert.equal(result.tax.income, '437.5', 'Only the 175 explicitly classified holding rewards are current income.');
+  assert.equal(result.rows[1].fiscalResult, '7', 'The first sale uses its gross EUR value and documented opening cost.');
+  assert.equal(result.rows[2].afterQuantity, '3', 'The bought quantity already includes the source fee.');
+  assert.equal(result.rows[3].receivedAfterQuantity, '4', 'The received swap quantity is not reduced by a fee again.');
+  assert.ok(converted.transactions.every(transaction => transaction.fees === '0'));
+
+  const recovered = parseCsv(exportCsv(converted));
+  assert.deepEqual(recovered, converted, 'All 1,401 operations, source columns, classifications and costs must recover exactly.');
+  assert.deepEqual(recovered.transactions.map(transaction => transaction.source.values), rows);
+  assert.deepEqual(recovered.initialLots, documented.initialLots);
+  assert.deepEqual(reviewed, reviewedBefore, 'Reusing the review after supplying opening holdings must preserve every choice.');
+  assert.deepEqual(input, sourceBefore, 'Neither failed nor successful conversion may alter the source history.');
+});
