@@ -182,7 +182,7 @@ function extendedFields(value, line) {
   return result;
 }
 
-function parseExtended(raw, line) {
+function parseExtended(raw, line, validator = extendedFields) {
   if (raw === '') return {};
   let parsed;
   try {
@@ -193,7 +193,13 @@ function parseExtended(raw, line) {
   } catch {
     throw error(line, 'il campo dati_estesi deve contenere JSON valido, senza chiavi riservate.');
   }
-  return extendedFields(parsed, line);
+  return validator(parsed, line);
+}
+
+function initialExtended(value, line) {
+  objectFields(value, ['basisMethod'], 'dati_estesi del lotto iniziale', line);
+  if (Object.hasOwn(value, 'basisMethod') && value.basisMethod !== 'estimated_average') throw error(line, 'basisMethod del lotto iniziale deve essere estimated_average.');
+  return Object.hasOwn(value, 'basisMethod') ? { basisMethod: value.basisMethod } : {};
 }
 
 /** Parse the canonical format. Numeric amounts remain exact decimal strings. */
@@ -229,15 +235,18 @@ export function parseCsv(text) {
       configurationFound = true;
       dataset.openingDate = dateField(row.data, 'data', line);
     } else if (row.tipo === 'iniziale') {
-      rejectUnused(row, [...common, 'id', 'data', 'ordine', 'cripto', 'quantita', 'prezzo_unitario_eur', 'data_acquisto_originale'], line);
+      rejectUnused(row, [...common, 'id', 'data', 'ordine', 'cripto', 'quantita', 'prezzo_unitario_eur', 'data_acquisto_originale', ...(version === 2 ? ['dati_estesi'] : [])], line);
       initialDates.push({ date: dateField(row.data, 'data', line), line });
+      const extra = version === 2 ? parseExtended(row.dati_estesi, line, initialExtended) : {};
+      if (extra.basisMethod && row.data_acquisto_originale !== '') throw error(line, 'il saldo aggregato stimato deve avere data_acquisto_originale vuota.');
       dataset.initialLots.push({
         id: textField(row.id, 'id', line),
         asset: textField(row.cripto, 'cripto', line),
-        acquiredOn: dateField(row.data_acquisto_originale, 'data_acquisto_originale', line),
+        acquiredOn: extra.basisMethod ? '' : dateField(row.data_acquisto_originale, 'data_acquisto_originale', line),
         order: integerField(row.ordine, 'ordine', line),
         quantity: decimalField(row.quantita, 'quantita', line),
         unitCost: decimalField(row.prezzo_unitario_eur, 'prezzo_unitario_eur', line),
+        ...extra,
       });
     } else if ((version === 2 ? TRANSACTION_TYPES : ['acquisto', 'vendita']).includes(row.tipo)) {
       rejectUnused(row, [...common, 'id', 'data', 'ordine', 'cripto', 'quantita', 'prezzo_unitario_eur', 'commissioni_eur', ...(version === 2 ? ['dati_estesi'] : [])], line);
@@ -295,11 +304,14 @@ export function exportCsv(dataset) {
   const rows = [[version, 'configurazione', '', openingDate, '', '', '', '', '', '', '', '', ...(version === 2 ? [''] : [])]];
   for (const lot of dataset.initialLots) {
     const line = rows.length + 2;
-    if (version === 2) objectFields(lot, ['id', 'asset', 'acquiredOn', 'order', 'quantity', 'unitCost'], 'lotto iniziale', line);
+    if (version === 2) objectFields(lot, ['id', 'asset', 'acquiredOn', 'order', 'quantity', 'unitCost', 'basisMethod'], 'lotto iniziale', line);
+    if (version !== 2 && Object.hasOwn(lot, 'basisMethod')) throw error(line, 'i costi medi stimati richiedono il formato 2.');
+    const extra = initialExtended(Object.hasOwn(lot, 'basisMethod') ? { basisMethod: lot.basisMethod } : {}, line);
+    if (extra.basisMethod && lot.acquiredOn !== '') throw error(line, 'il saldo aggregato stimato deve avere data originaria vuota.');
     rows.push([version, 'iniziale', textField(lot.id, 'id', line), openingDate,
       integerField(lot.order, 'ordine', line), textField(lot.asset, 'cripto', line),
       decimalField(lot.quantity, 'quantita', line), decimalField(lot.unitCost, 'prezzo_unitario_eur', line), '',
-      dateField(lot.acquiredOn, 'data_acquisto_originale', line), '', '', ...(version === 2 ? [''] : [])]);
+      extra.basisMethod ? '' : dateField(lot.acquiredOn, 'data_acquisto_originale', line), '', '', ...(version === 2 ? [extra.basisMethod ? JSON.stringify(extra) : ''] : [])]);
   }
   for (const transaction of dataset.transactions) {
     const line = rows.length + 2;

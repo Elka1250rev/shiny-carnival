@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { sheetDecimal, parseOpeningSheet, openingDateForSnapshot, convertOpeningSnapshot, OPENING_COLUMNS } from '../dist/opening-import.js';
-import { calculate } from '../dist/engine.js';
+import { calculate, validateDataset } from '../dist/engine.js';
+import { buildPdfReportData } from '../dist/pdf-report.js';
 import { exportCsv, parseCsv } from '../dist/csv.js';
 
 const cell = (value, formula = null) => ({ value, formula, type: 'text' });
@@ -90,4 +91,45 @@ test('explicitly confirmed zero or fiat-only snapshots can clear opening lots wi
   assert.deepEqual(result.initialLots, []);
   assert.equal(calculate(result, 2025).holdings.length, 0);
   assert.deepEqual(parseCsv(exportCsv(result)), result);
+});
+
+test('an explicitly estimated average is recoverable and editable without inventing purchase dates', () => {
+  const source = parseOpeningSheet(table());
+  const next = convertOpeningSnapshot(source, current(), options({ valueMeaning: 'estimated_average', lots: { 4: [{ quantity: '3', unitCost: '900', acquiredOn: '' }] } }));
+  assert.equal(next.version, 2);
+  assert.equal(next.initialLots[0].basisMethod, 'estimated_average');
+  assert.equal(next.initialLots[0].acquiredOn, '');
+  assert.equal(calculate(next, 2025).rows[0].fiscalResult, '-875');
+  assert.deepEqual(parseCsv(exportCsv(next)), next);
+  next.initialLots[0].unitCost = '15';
+  const updated = calculate(next, 2025);
+  assert.equal(updated.rows[0].fiscalResult, '10');
+  assert.ok(updated.warnings.some(message => message.includes('stimato') && message.includes('indicativi')));
+  assert.match(JSON.stringify(buildPdfReportData(updated, next.openingDate)), /prezzo medio storico stimato/);
+  assert.deepEqual(parseCsv(exportCsv(next)), next, 'A later cost correction must preserve the estimated status and blank date.');
+  assert.throws(() => exportCsv({ ...next, version: 1 }), /formato 2/);
+});
+
+test('new purchases precede undated opening aggregates in LIFO, including opening-day orders', () => {
+  const next = convertOpeningSnapshot(parseOpeningSheet(table()), { ...current(), carryLosses: [], transactions: [
+    { id: 'new', asset: 'ALFA', date: '2025-01-01', order: 0, type: 'acquisto', quantity: '1', unitPrice: '30', fees: '0' },
+    { id: 'sale', asset: 'ALFA', date: '2025-01-01', order: 1, type: 'vendita', quantity: '2', unitPrice: '40', fees: '0' }
+  ] }, options({ valueMeaning: 'estimated_average', lots: { 4: [{ quantity: '3', unitCost: '12' }] } }));
+  const sale = calculate(next, 2025).rows[1];
+  assert.equal(sale.costBasis, '42');
+  assert.equal(sale.fiscalResult, '38');
+  assert.deepEqual(sale.lotDetails.map(lot => lot.acquiredOn), ['2025-01-01', '']);
+});
+
+test('estimated flags reject false dates, unknown methods and mixed initial lots for the same asset', () => {
+  const next = convertOpeningSnapshot(parseOpeningSheet(table()), current(), options({ valueMeaning: 'estimated_average', lots: { 4: [{ quantity: '3', unitCost: '12' }] } }));
+  const dated = structuredClone(next); dated.initialLots[0].acquiredOn = '2024-12-31';
+  assert.throws(() => exportCsv(dated), /vuota/);
+  assert.ok(validateDataset(dated).some(error => error.location.endsWith('.acquiredOn')));
+  const unknown = structuredClone(next); unknown.initialLots[0].basisMethod = 'market_value';
+  assert.throws(() => exportCsv(unknown), /basisMethod/);
+  const mixed = structuredClone(next); mixed.initialLots.push({ id: 'extra', asset: 'ALFA', acquiredOn: '2024-02-01', order: 1, quantity: '1', unitCost: '5' });
+  assert.ok(validateDataset(mixed).some(error => error.message.includes('unico lotto iniziale')));
+  const unmarked = structuredClone(next); delete unmarked.initialLots[0].basisMethod;
+  assert.ok(validateDataset(unmarked).some(error => error.location.endsWith('.acquiredOn')));
 });

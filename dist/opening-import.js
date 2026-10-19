@@ -93,8 +93,9 @@ function amount(value, label, positive = false) {
 export function convertOpeningSnapshot(source, current, options) {
   if (!source || source.kind !== 'opening-sheet' || !Array.isArray(source.rows)) throw new Error('Seleziona una tabella iniziale valida.');
   const openingDate = openingDateForSnapshot(options?.snapshotDate, options?.timing);
+  const estimated = options.valueMeaning === 'estimated_average';
   if (options.replaceConfirmed !== true) throw new Error('Conferma la sostituzione dei lotti iniziali e della data di apertura.');
-  if (options.costsConfirmed !== true) throw new Error('Conferma quantità, date originarie e costi fiscali documentati dei lotti.');
+  if (options.costsConfirmed !== true) throw new Error(estimated ? 'Conferma l’uso dei prezzi medi storici stimati e dei saldi aggregati: i risultati saranno indicativi.' : 'Conferma quantità, date originarie e costi fiscali documentati dei lotti.');
   if (source.rows.some(row => row.asset === 'EUR') && options.euroConfirmed !== true) throw new Error('Conferma che la riga EUR sia liquidità informativa, esclusa dai lotti crypto.');
   const idPrefix = options.idPrefix || 'apertura-' + crypto.randomUUID();
   const lots = [];
@@ -105,21 +106,26 @@ export function convertOpeningSnapshot(source, current, options) {
     if (!Array.isArray(details)) fail(row.row, 'i lotti devono essere un elenco.');
     if (target.decimal.cmp('0') === 0 && !details.length) continue;
     if (!details.length) fail(row.row, 'inserisci almeno un lotto con data e costo documentati per ' + row.asset + '.');
+    if (estimated && details.length !== 1) fail(row.row, 'la stima da prezzo medio storico usa un solo saldo aggregato per crypto; scegli i lotti documentati per suddividerlo.');
     let sum = Decimal.from('0');
     for (const [index, lot] of details.entries()) {
       const label = `Riga Excel ${row.row}, lotto ${index + 1}`;
-      date(lot.acquiredOn, label + ': data originaria di acquisto');
-      if (lot.acquiredOn > options.snapshotDate) throw new Error(label + ': l’acquisto non può essere successivo alla data dei saldi.');
+      if (!estimated) {
+        date(lot.acquiredOn, label + ': data originaria di acquisto');
+        if (lot.acquiredOn > options.snapshotDate) throw new Error(label + ': l’acquisto non può essere successivo alla data dei saldi.');
+      }
       const quantity = amount(lot.quantity, label, true);
       const cost = amount(lot.unitCost, label + ': costo unitario fiscale');
       sum = sum.add(quantity.decimal);
-      lots.push({ id: `${idPrefix}-${row.row}-${index}`, asset: row.asset, acquiredOn: lot.acquiredOn,
-        order: lots.length + 1, quantity: quantity.text, unitCost: cost.text });
+      lots.push({ id: `${idPrefix}-${row.row}-${index}`, asset: row.asset, acquiredOn: estimated ? '' : lot.acquiredOn,
+        order: lots.length + 1, quantity: quantity.text, unitCost: cost.text,
+        ...(estimated ? { basisMethod: 'estimated_average' } : {}) });
       if (lots.length > 5000) throw new Error('Il limite è di 5.000 lotti; considera anche le operazioni e le minusvalenze esistenti.');
     }
     if (sum.cmp(target.decimal) !== 0) fail(row.row, `la somma dei lotti di ${row.asset} deve coincidere con la quantità confermata (${target.text}).`);
   }
   const next = structuredClone(current);
+  if (estimated) next.version = 2;
   next.openingDate = openingDate;
   next.initialLots = lots;
   return next;

@@ -97,7 +97,7 @@ function formatDecimal(value, places = 2, trim = false) {
 }
 const money = value => value === null || value === undefined ? '—' : formatDecimal(value) + ' €';
 const quantity = value => formatDecimal(value, 18, true);
-const dateLabel = value => String(value).split('-').reverse().join('/');
+const dateLabel = value => value ? String(value).split('-').reverse().join('/') : 'Data non disponibile';
 const signedMoney = value => value === null || value === undefined ? '—' : (Decimal.from(value).cmp('0') > 0 ? '+' : '') + money(value);
 const numericClass = value => value && Decimal.from(value).cmp('0') < 0 ? 'negative' : value && Decimal.from(value).cmp('0') > 0 ? 'positive' : '';
 const id = prefix => prefix + '-' + crypto.randomUUID();
@@ -211,7 +211,7 @@ function renderLedger() {
   } else if (view === 'holdings') {
     html = `<div class="table-scroll"><table><thead><tr><th>CRYPTO</th><th class="numeric">QUANTITÀ RESIDUA</th><th class="numeric">PREZZO MEDIO GESTIONALE</th><th class="numeric">COSTO FISCALE RESIDUO</th></tr></thead><tbody>${records.map(holding => `<tr><td>${assetCell(holding.asset)}</td><td class="numeric">${quantity(holding.quantity)}</td><td class="numeric">${Decimal.from(holding.quantity).cmp('0') ? money(holding.average) : '—'}<span class="subvalue">Costo gestionale ${money(holding.cost)}</span></td><td class="numeric">${money(holding.fiscalCost)}<span class="subvalue">Media lotti ${Decimal.from(holding.quantity).cmp('0') ? money(holding.fiscalAverage) : '—'}</span></td></tr>`).join('')}</tbody></table></div>`;
   } else if (view === 'lots') {
-    html = `<div class="table-scroll"><table><thead><tr><th>ACQUISTO ORIGINARIO</th><th>CRYPTO</th><th class="numeric">QUANTITÀ</th><th class="numeric">COSTO UNITARIO</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${records.map(lot => `<tr><td>${dateLabel(lot.acquiredOn)}<span class="subvalue">Sequenza ${lot.order}</span></td><td>${assetCell(lot.asset)}</td><td class="numeric">${quantity(lot.quantity)}</td><td class="numeric">${money(lot.unitCost)}<span class="subvalue">Totale ${money(Decimal.from(lot.quantity).mul(lot.unitCost))}</span></td><td>${actionButtons(lot.id, 'initialLots')}</td></tr>`).join('')}</tbody></table></div>`;
+    html = `<div class="table-scroll"><table><thead><tr><th>ACQUISTO ORIGINARIO</th><th>CRYPTO</th><th class="numeric">QUANTITÀ</th><th class="numeric">COSTO UNITARIO</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${records.map(lot => `<tr><td>${dateLabel(lot.acquiredOn)}${lot.basisMethod ? '<span class="subvalue">Prezzo medio storico stimato</span>' : ''}<span class="subvalue">Sequenza ${lot.order}</span></td><td>${assetCell(lot.asset)}</td><td class="numeric">${quantity(lot.quantity)}</td><td class="numeric">${money(lot.unitCost)}<span class="subvalue">Totale ${money(Decimal.from(lot.quantity).mul(lot.unitCost))}</span></td><td>${actionButtons(lot.id, 'initialLots')}</td></tr>`).join('')}</tbody></table></div>`;
   } else {
     html = `<div class="table-scroll"><table><thead><tr><th>ANNO DI ORIGINE</th><th class="numeric">RESIDUO ALL’APERTURA</th><th>UTILIZZABILE FINO AL</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${records.map(loss => `<tr><td>${loss.year}</td><td class="numeric">${money(loss.amount)}</td><td>${loss.year + 4}</td><td>${actionButtons(loss.id, 'carryLosses')}</td></tr>`).join('')}</tbody></table></div>`;
   }
@@ -251,10 +251,11 @@ function openEntry(kind = 'transactions', recordId = null) {
     $('entry-title').textContent = record ? 'Modifica lotto iniziale' : 'Nuovo lotto iniziale';
     $('entry-description').textContent = 'Inserisci un lotto ancora disponibile al ' + dateLabel(dataset.openingDate) + '. Per un LIFO corretto conserva le date e i costi originari dei lotti.';
     fields = field('asset', 'Crypto / identificatore', record?.asset || '', { maxLength: 50, full: true })
-      + field('acquiredOn', 'Data originaria di acquisto', record?.acquiredOn || dataset.openingDate, { type: 'date', max: dataset.openingDate })
+      + (record?.basisMethod === 'estimated_average' ? field('basisMethod', 'Tipo di saldo iniziale', 'estimated_average', { full: true, choices: [{ value: 'estimated_average', label: 'Saldo aggregato a prezzo medio storico stimato' }, { value: '', label: 'Lotto documentato: richiede una data originaria' }] }) : '')
+      + field('acquiredOn', 'Data originaria di acquisto', record?.basisMethod === 'estimated_average' ? '' : record?.acquiredOn || dataset.openingDate, { type: 'date', max: dataset.openingDate, required: record?.basisMethod !== 'estimated_average', hint: record?.basisMethod === 'estimated_average' ? 'Lascia vuota per il saldo stimato. Per passare a un lotto documentato scegli il tipo corrispondente e inserisci la data effettiva.' : '' })
       + field('order', 'Sequenza di acquisto', record?.order ?? nextOrder(dataset.initialLots), { type: 'number', min: 0, step: 1, hint: 'Ordina i lotti acquistati nella stessa giornata.' })
       + field('quantity', 'Quantità residua all’apertura', record?.quantity || '', { decimal: true })
-      + field('unitCost', 'Costo unitario fiscale documentato (€)', record?.unitCost || '', { decimal: true, hint: 'Escludi commissioni e oneri accessori. Verifica anche i lotti salvati con versioni precedenti del sito.' });
+      + field('unitCost', record?.basisMethod === 'estimated_average' ? 'Prezzo medio storico stimato (€)' : 'Costo unitario fiscale documentato (€)', record?.unitCost || '', { decimal: true, hint: 'Il valore è modificabile: portafoglio e imposta saranno ricalcolati. Escludi commissioni e oneri accessori.' });
   } else if (kind === 'carryLosses') {
     const openingYear = Number(dataset.openingDate.slice(0, 4));
     $('entry-title').textContent = record ? 'Modifica residuo pregresso' : 'Minusvalenza pregressa';
@@ -269,6 +270,12 @@ function openEntry(kind = 'transactions', recordId = null) {
   $('entry-fields').innerHTML = fields;
   if (kind === 'transactions') {
     bindTransactionOrder($('field-date'), $('field-order'), dataset.transactions, record);
+  }
+  if (kind === 'initialLots' && record?.basisMethod === 'estimated_average') {
+    $('entry-description').textContent = 'Saldo aggregato a prezzo medio storico stimato. Puoi modificare quantità e costo; i risultati rimangono indicativi. Per ricostruire un lotto documentato cambia il tipo e inserisci la data effettiva.';
+    $('field-basisMethod').addEventListener('change', event => {
+      $('field-acquiredOn').required = event.target.value !== 'estimated_average';
+    });
   }
   showDialog('entry-dialog');
 }
@@ -289,7 +296,12 @@ function saveEntry(event) {
     else {
       let row;
       if (kind === 'transactions') row = { id: recordId || id('tx'), asset: input.asset.trim().toUpperCase(), date: input.date, type: input.type, order: Number(input.order), quantity: readAmount(input.quantity), unitPrice: readAmount(input.unitPrice), fees: readAmount(input.fees) };
-      else if (kind === 'initialLots') row = { id: recordId || id('lotto'), asset: input.asset.trim().toUpperCase(), acquiredOn: input.acquiredOn, order: Number(input.order), quantity: readAmount(input.quantity), unitCost: readAmount(input.unitCost) };
+      else if (kind === 'initialLots') {
+        const estimated = input.basisMethod === 'estimated_average';
+        if (estimated && input.acquiredOn) throw new Error('Per inserire una data originaria scegli «Lotto documentato»; il saldo aggregato stimato conserva la data non disponibile.');
+        row = { id: recordId || id('lotto'), asset: input.asset.trim().toUpperCase(), acquiredOn: estimated ? '' : input.acquiredOn, order: Number(input.order), quantity: readAmount(input.quantity), unitCost: readAmount(input.unitCost), ...(estimated ? { basisMethod: 'estimated_average' } : {}) };
+        if (estimated) next.version = 2;
+      }
       else row = { id: recordId || id('perdita'), year: Number(input.year), amount: readAmount(input.amount) };
       const index = recordId ? next[kind].findIndex(item => item.id === recordId) : -1;
       if (index >= 0) next[kind][index] = row;
@@ -323,7 +335,7 @@ function showDetails(recordId) {
   const sourceHtml = source ? `<details><summary>Dati originali del CSV e scelte confermate</summary><p class="small-note">Per rettificare, ricarica il CSV della piattaforma. Gli importi originali sono conservati separatamente dai valori fiscali applicati.</p>${Object.entries(source).map(([key, value]) => pair(escapeHtml(key), value || '—')).join('')}${Object.entries(row.source.decisions || {}).map(([key, value]) => pair(escapeHtml(key), String(value))).join('')}</details>` : '';
   const realized = row.fiscalKind === 'capital_gain';
   const fiscalCostLabel = row.fiscalKind === 'neutral' ? 'Costo storico trasferito' : row.fiscalKind === 'income' ? 'Costo documentato dei token ricevuti' : 'Costo fiscale (commissioni escluse)';
-  $('detail-content').innerHTML = `<p class="modal-description">${dateLabel(row.date)} · sequenza ${row.order} · ${quantity(row.quantity)} ${escapeHtml(row.asset)}${row.receivedAsset ? ` → ${quantity(row.receivedQuantity)} ${escapeHtml(row.receivedAsset)}` : ''}</p>${row.fiscalKind === 'fiat' ? '<p>Deposito EUR informativo: non modifica le posizioni crypto né il risultato fiscale.</p>' : `<div class="detail-grid"><section class="detail-block"><h3>Prima dell’operazione</h3>${balances(true)}</section><section class="detail-block"><h3>Dopo l’operazione</h3>${balances(false)}</section></div>`}<div class="detail-result">${row.totalEur !== undefined ? pair('Controvalore fiscale totale', money(row.totalEur)) : ''}${realized ? pair('Corrispettivo fiscale lordo', money(row.proceeds)) : ''}${pair(fiscalCostLabel, money(row.fiscalKind === 'income' ? row.rewardCostEur : row.costBasis))}${pair('Commissioni aggiuntive gestionali in euro', money(row.fees))}${realized ? pair('Risultato gestionale (prezzo medio)', signedMoney(row.managementResult)) : ''}${pair('Risultato fiscale', signedMoney(row.fiscalResult) + ' · ' + fiscalLabel(row))}${row.lotDatePolicy ? pair('Data dei lotti ricevuti', row.lotDatePolicy === 'historical' ? 'Storica dei lotti ceduti' : 'Data dello scambio') : ''}</div>${row.lotDetails.length ? `<h3 class="detail-table-caption">Lotti attribuiti all’operazione, dal più recente</h3><div class="table-scroll"><table class="detail-table"><thead><tr><th>ACQUISTO</th><th class="numeric">QUANTITÀ</th><th class="numeric">COSTO UNITARIO</th><th class="numeric">COSTO ATTRIBUITO</th></tr></thead><tbody>${row.lotDetails.map(lot => `<tr><td>${dateLabel(lot.acquiredOn)}<span class="subvalue">Sequenza ${lot.order}</span></td><td class="numeric">${quantity(lot.quantity)}</td><td class="numeric">${money(lot.unitCost)}</td><td class="numeric">${money(lot.cost)}</td></tr>`).join('')}</tbody></table></div>` : ''}${sourceHtml}<p class="small-note">Le commissioni non sono dedotte fiscalmente. I valori a video sono arrotondati per la lettura; l’imposta finale è arrotondata ai centesimi.</p>`;
+  $('detail-content').innerHTML = `<p class="modal-description">${dateLabel(row.date)} · sequenza ${row.order} · ${quantity(row.quantity)} ${escapeHtml(row.asset)}${row.receivedAsset ? ` → ${quantity(row.receivedQuantity)} ${escapeHtml(row.receivedAsset)}` : ''}</p>${row.fiscalKind === 'fiat' ? '<p>Deposito EUR informativo: non modifica le posizioni crypto né il risultato fiscale.</p>' : `<div class="detail-grid"><section class="detail-block"><h3>Prima dell’operazione</h3>${balances(true)}</section><section class="detail-block"><h3>Dopo l’operazione</h3>${balances(false)}</section></div>`}<div class="detail-result">${row.totalEur !== undefined ? pair('Controvalore fiscale totale', money(row.totalEur)) : ''}${realized ? pair('Corrispettivo fiscale lordo', money(row.proceeds)) : ''}${pair(fiscalCostLabel, money(row.fiscalKind === 'income' ? row.rewardCostEur : row.costBasis))}${pair('Commissioni aggiuntive gestionali in euro', money(row.fees))}${realized ? pair('Risultato gestionale (prezzo medio)', signedMoney(row.managementResult)) : ''}${pair('Risultato fiscale', signedMoney(row.fiscalResult) + ' · ' + fiscalLabel(row))}${row.lotDatePolicy ? pair('Data dei lotti ricevuti', row.lotDatePolicy === 'historical' ? 'Storica dei lotti ceduti' : 'Data dello scambio') : ''}</div>${row.lotDetails.length ? `<h3 class="detail-table-caption">Lotti attribuiti all’operazione, dal più recente</h3><div class="table-scroll"><table class="detail-table"><thead><tr><th>ACQUISTO</th><th class="numeric">QUANTITÀ</th><th class="numeric">COSTO UNITARIO</th><th class="numeric">COSTO ATTRIBUITO</th></tr></thead><tbody>${row.lotDetails.map(lot => `<tr><td>${dateLabel(lot.acquiredOn)}${lot.basisMethod ? '<span class="subvalue">Prezzo medio storico stimato</span>' : ''}<span class="subvalue">Sequenza ${lot.order}</span></td><td class="numeric">${quantity(lot.quantity)}</td><td class="numeric">${money(lot.unitCost)}</td><td class="numeric">${money(lot.cost)}</td></tr>`).join('')}</tbody></table></div>` : ''}${sourceHtml}<p class="small-note">Le commissioni non sono dedotte fiscalmente. I valori a video sono arrotondati per la lettura; l’imposta finale è arrotondata ai centesimi.</p>`;
   showDialog('detail-dialog');
 }
 function download(content, filename) {

@@ -36,8 +36,9 @@ export async function verifyOpeningXlsx({ page, label, artifacts, activateButton
     assert.equal(await page.locator('#opening-timing').inputValue(), '');
     const alfa = review.locator('[data-excel-row="4"]');
     const beta = review.locator('[data-excel-row="5"]');
-    assert.equal(await alfa.getByLabel('Data originaria di acquisto', { exact: true }).inputValue(), '');
-    assert.equal(await alfa.getByLabel('Costo unitario fiscale documentato (€)', { exact: true }).inputValue(), '');
+    assert.equal(await page.locator('#opening-value-meaning').inputValue(), 'estimated_average');
+    assert.equal(await alfa.getByLabel('Prezzo medio storico stimato (€)', { exact: true }).inputValue(), '900');
+    assert.equal(await alfa.getByLabel('Data originaria di acquisto', { exact: true }).count(), 0, 'An aggregated estimate must not invent an acquisition date.');
     assert.equal(await beta.getByLabel('Quantità totale confermata di BETA', { exact: true }).inputValue(), '2.000000000000000001');
     assert.equal(await review.locator('img').count(), 0);
     assert.equal(await page.evaluate(() => window.__openingXss), undefined);
@@ -45,6 +46,8 @@ export async function verifyOpeningXlsx({ page, label, artifacts, activateButton
     await page.locator('#opening-snapshot-date').fill('2024-12-31');
     await page.locator('#opening-timing').selectOption('end');
     await page.locator('#opening-value-meaning').selectOption('unit_cost');
+    assert.equal(await alfa.getByLabel('Data originaria di acquisto', { exact: true }).inputValue(), '');
+    assert.equal(await alfa.getByLabel('Costo unitario fiscale documentato (€)', { exact: true }).inputValue(), '');
     await tap(alfa.getByRole('button', { name: 'Usa CRIPTO/EURO come costo di questo lotto', exact: true }));
     assert.equal(await alfa.getByLabel('Costo unitario fiscale documentato (€)', { exact: true }).inputValue(), '900');
     await page.locator('#opening-value-meaning').selectOption('market');
@@ -61,7 +64,7 @@ export async function verifyOpeningXlsx({ page, label, artifacts, activateButton
     await second.getByLabel('Costo unitario fiscale documentato (€)', { exact: true }).fill('20');
     await beta.getByLabel('Data originaria di acquisto', { exact: true }).fill('2024-09-12');
     await beta.getByLabel('Costo unitario fiscale documentato (€)', { exact: true }).fill('12');
-    for (const id of ['opening-costs-confirm', 'opening-replace-confirm', 'opening-euro-confirm']) await tap(page.locator('#' + id));
+    for (const id of ['opening-costs-confirm', 'opening-replace-confirm', 'opening-euro-confirm']) if (!await page.locator('#' + id).isChecked()) await tap(page.locator('#' + id));
     assert.equal(await confirm.isDisabled(), true, 'Two units in documented lots must not reconcile against a confirmed total of three.');
     assert.match(await page.locator('#opening-status').textContent(), /somma dei lotti/);
     await second.getByLabel('Quantità del lotto', { exact: true }).fill('2');
@@ -88,6 +91,7 @@ export async function verifyOpeningXlsx({ page, label, artifacts, activateButton
   assert.equal(applied.initialLots.find(lot => lot.asset === 'BETA').quantity, '2.000000000000000001');
   assert.deepEqual(applied.transactions, initial.transactions, 'Initial inventory must preserve existing transactions.');
   await page.screenshot({ path: resolve(artifacts, 'opening-xlsx-' + label + '-lots.png') });
+  await tap(page.locator('[data-view="transactions"]'));
   await importDataset(page, applied, '', 1);
   assert.deepEqual(parseCsv(await downloadSession(page, 'opening-xlsx-' + label + '-recovered')), applied);
 
@@ -127,7 +131,40 @@ export async function verifyOpeningXlsx({ page, label, artifacts, activateButton
   const final = parseCsv(await downloadSession(page, 'opening-xlsx-' + label + '-with-operations'));
   assert.equal(final.initialLots.length, 3); assert.equal(final.transactions.length, 2);
   assert.deepEqual(final.transactions.find(row => row.id === 'xlsx-followup-sale').source.values, csv[0]);
+
+  // The default average-cost estimate is editable later and never invents dates.
+  await tap(page.locator('[data-view="lots"]'));
+  await openFromLots();
+  assert.equal(await page.locator('#opening-value-meaning').inputValue(), 'estimated_average');
+  await page.locator('#opening-snapshot-date').fill('2024-12-31');
+  await page.locator('#opening-timing').selectOption('end');
+  await review.locator('[data-excel-row="4"]').getByLabel('Prezzo medio storico stimato (€)', { exact: true }).fill('21');
+  for (const id of ['opening-costs-confirm', 'opening-replace-confirm']) await tap(page.locator('#' + id));
+  await page.waitForFunction(() => !document.getElementById('confirm-opening-import').disabled);
+  await tap(confirm);
+  await modal.waitFor({ state: 'hidden' });
+  const estimated = parseCsv(await downloadSession(page, 'opening-xlsx-' + label + '-estimated'));
+  assert.equal(estimated.initialLots.length, 2);
+  assert.ok(estimated.initialLots.every(lot => lot.basisMethod === 'estimated_average' && lot.acquiredOn === ''));
+  assert.equal(estimated.initialLots.find(lot => lot.asset === 'ALFA').unitCost, '21');
+  assert.match(await page.locator('#ledger-content').textContent(), /prezzo medio storico stimato|Prezzo medio storico stimato/);
+  assert.match(await page.locator('#ledger-content .warning-block').textContent(), /indicativi/);
+  const alfaRow = page.locator('#ledger-content tbody tr').filter({ hasText: 'ALFA' });
+  await tap(alfaRow.getByRole('button', { name: 'Modifica', exact: true }));
+  const entry = page.locator('#entry-dialog');
+  assert.equal(await entry.getByLabel('Data originaria di acquisto', { exact: true }).inputValue(), '');
+  await entry.getByLabel('Prezzo medio storico stimato (€)', { exact: true }).fill('19');
+  await tap(entry.getByRole('button', { name: 'Salva e ricalcola', exact: true }));
+  await entry.waitFor({ state: 'hidden' });
+  const corrected = parseCsv(await downloadSession(page, 'opening-xlsx-' + label + '-corrected'));
+  assert.equal(corrected.initialLots.find(lot => lot.asset === 'ALFA').unitCost, '19');
+  assert.ok(corrected.initialLots.every(lot => lot.basisMethod === 'estimated_average' && lot.acquiredOn === ''));
+  assert.match(await page.locator('#metric-net').textContent(), /6,00 €/);
+  await tap(page.locator('[data-view="transactions"]'));
+  await importDataset(page, corrected, '', 2);
+  assert.deepEqual(parseCsv(await downloadSession(page, 'opening-xlsx-' + label + '-estimate-recovered')), corrected);
   results.push({ name: 'opening-xlsx-' + label, explicitSnapshotDate: true, explicitDayBoundary: true, originalAcquisitionDatesRequired: true,
-    marketPriceNotUsedAsCost: true, splitLotsReconciled: true, precisionPreserved: true, cancellationAtomic: true, csvRoundTripVerified: true, sourceCsvReviewPreserved: true });
+    marketPriceNotUsedAsCost: true, splitLotsReconciled: true, precisionPreserved: true, cancellationAtomic: true, csvRoundTripVerified: true, sourceCsvReviewPreserved: true,
+    estimatedAverageEditableLater: true, missingPurchaseDatesPreserved: true, estimatedStatusRecoverable: true });
   console.log(`PASS opening-xlsx-${label}: local Excel, explicit dates, split documented lots, atomic preview and CSV recovery.`);
 }

@@ -51,6 +51,7 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
       replaceConfirmed: find('opening-replace-confirm').checked,
       costsConfirmed: find('opening-costs-confirm').checked,
       euroConfirmed: find('opening-euro-confirm').checked,
+      valueMeaning: find('opening-value-meaning').value,
       lots, quantities
     };
   }
@@ -76,6 +77,11 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
   function renderLots() {
     const container = find('opening-lots');
     container.replaceChildren();
+    const estimated = find('opening-value-meaning').value === 'estimated_average';
+    find('opening-costs-label').textContent = estimated
+      ? 'Ho verificato le quantità e i prezzi medi storici stimati. Confermo l’uso di saldi aggregati con date originarie non disponibili: risultati e imposta sono indicativi e i costi restano modificabili.'
+      : 'Ho verificato quantità, date originarie e costi fiscali documentati dei singoli lotti, esclusi commissioni e oneri accessori.';
+    find('opening-estimated-note').hidden = !estimated;
     const cryptoRows = source.rows.filter(row => row.asset !== 'EUR');
     if (!cryptoRows.length) {
       container.append(node('p', 'Il foglio contiene solo liquidità EUR informativa: la conferma imposterà una situazione iniziale senza lotti crypto.', 'small-note'));
@@ -92,11 +98,11 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
       field(section, 'Quantità totale confermata di ' + row.asset, quantities[row.row], value => { quantities[row.row] = value; });
       for (const [index, lot] of lots[row.row].entries()) {
         const block = node('div', undefined, 'opening-lot');
-        block.append(node('p', `Lotto ${index + 1}`, 'small-note'));
+        block.append(node('p', estimated ? 'Saldo aggregato a prezzo medio storico stimato · data di acquisto non disponibile' : `Lotto ${index + 1}`, 'small-note'));
         const grid = node('div', undefined, 'form-grid');
-        field(grid, 'Data originaria di acquisto', lot.acquiredOn, value => { lot.acquiredOn = value; }, 'date');
+        if (!estimated) field(grid, 'Data originaria di acquisto', lot.acquiredOn, value => { lot.acquiredOn = value; }, 'date');
         field(grid, 'Quantità del lotto', lot.quantity, value => { lot.quantity = value; });
-        field(grid, 'Costo unitario fiscale documentato (€)', lot.unitCost, value => { lot.unitCost = value; lot.costOrigin = 'manual'; });
+        field(grid, estimated ? 'Prezzo medio storico stimato (€)' : 'Costo unitario fiscale documentato (€)', lot.unitCost, value => { lot.unitCost = value; lot.costOrigin = 'manual'; });
         block.append(grid);
         const controls = node('div', undefined, 'opening-actions');
         if (find('opening-value-meaning').value === 'unit_cost' && lots[row.row].length === 1) controls.append(action('Usa CRIPTO/EURO come costo di questo lotto', () => {
@@ -111,11 +117,13 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
         block.append(controls);
         section.append(block);
       }
-      section.append(action('Aggiungi lotto di ' + row.asset, () => {
+      if (!estimated || !lots[row.row].length) section.append(action((estimated ? 'Aggiungi saldo di ' : 'Aggiungi lotto di ') + row.asset, () => {
         const count = Object.values(lots).reduce((total, values) => total + values.length, 0);
         if (count >= 5000) { message('Il limite è di 5.000 lotti complessivi.'); return; }
         for (const lot of lots[row.row]) if (lot.costOrigin === 'sheet') { lot.unitCost = ''; lot.costOrigin = 'manual'; }
-        lots[row.row].push({ acquiredOn: '', quantity: '', unitCost: '', costOrigin: 'manual' });
+        let cost = '';
+        if (estimated && row.unitFormula === null) { try { cost = sheetDecimal(row.unitValue); } catch { /* Editable below. */ } }
+        lots[row.row].push({ acquiredOn: '', quantity: estimated ? quantities[row.row] : '', unitCost: cost, costOrigin: estimated ? 'estimate' : 'manual' });
         renderLots(); check();
       }));
       container.append(section);
@@ -138,7 +146,7 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
     if (index === '') return;
     find('opening-snapshot-date').value = '';
     find('opening-timing').value = '';
-    find('opening-value-meaning').value = '';
+    find('opening-value-meaning').value = 'estimated_average';
     find('opening-replace-confirm').checked = false;
     find('opening-costs-confirm').checked = false;
     try {
@@ -146,15 +154,17 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
       lots = {}; quantities = {}; page = 0;
       for (const row of source.rows) {
         quantities[row.row] = row.quantity;
+        let estimatedCost = '';
+        try { if (row.unitFormula === null) estimatedCost = sheetDecimal(row.unitValue); } catch { /* Ask for a manual correction. */ }
         if (row.asset !== 'EUR') lots[row.row] = /[1-9]/.test(row.quantity)
-          ? [{ acquiredOn: '', quantity: row.quantity, unitCost: '', costOrigin: 'manual' }] : [];
+          ? [{ acquiredOn: '', quantity: row.quantity, unitCost: estimatedCost, costOrigin: 'estimate' }] : [];
       }
       const summary = find('opening-source-summary');
       summary.replaceChildren(node('p', `Foglio «${source.name}»: intestazioni alla riga ${source.headerRow}, ${source.rows.length} posizioni e ${source.totals.length} righe di totale informative.`));
       for (const note of source.notes) summary.append(node('p', `Nota del file (riga ${note.row}): ${note.text}`, 'small-note'));
       const euros = source.rows.filter(row => row.asset === 'EUR');
       find('opening-euro-field').hidden = !euros.length;
-      find('opening-euro-confirm').checked = false;
+      find('opening-euro-confirm').checked = euros.length > 0;
       find('opening-euro-info').textContent = euros.map(row => `Riga ${row.row}: quantità EUR ${row.quantity}; CRIPTO/EURO ${row.unitValue || '—'}; EURO ${row.totalValue || '—'}.`).join(' ');
       find('opening-review').hidden = false;
       renderLots(); check();
@@ -197,7 +207,16 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
   find('opening-value-meaning').addEventListener('change', () => {
     if (!source) return;
     if (find('opening-value-meaning').value !== 'unit_cost') for (const rows of Object.values(lots)) for (const lot of rows) {
-      if (lot.costOrigin === 'sheet') { lot.unitCost = ''; lot.costOrigin = 'manual'; }
+      if (lot.costOrigin === 'sheet' || lot.costOrigin === 'estimate') { lot.unitCost = ''; lot.costOrigin = 'manual'; }
+    }
+    if (find('opening-value-meaning').value === 'unit_cost') for (const rows of Object.values(lots)) for (const lot of rows) {
+      if (lot.costOrigin === 'estimate') { lot.unitCost = ''; lot.costOrigin = 'manual'; }
+    }
+    if (find('opening-value-meaning').value === 'estimated_average') for (const row of source.rows) {
+      const first = lots[row.row]?.[0];
+      if (first && lots[row.row].length === 1 && first.unitCost === '' && row.unitFormula === null) {
+        try { first.unitCost = sheetDecimal(row.unitValue); first.costOrigin = 'estimate'; } catch { /* Remain editable. */ }
+      }
     }
     renderLots(); check();
   });

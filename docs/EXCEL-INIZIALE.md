@@ -24,7 +24,17 @@ Esempio: saldi alla fine del **31 dicembre 2024** diventano disponibilità all'a
 
 La data dei saldi non è la data originaria di acquisto. Quest'ultima va inserita per ogni lotto: nessun acquisto viene datato automaticamente al 31 dicembre o al giorno di apertura.
 
-## Costi e lotti
+## Prezzo medio storico stimato e modifica successiva
+
+Per il tracciato è preimpostata l’ipotesi autorizzata **prezzo medio storico stimato**: `CRIPTO/EURO` precompila il costo unitario di un saldo aggregato per crypto, sempre modificabile nell’anteprima. La conferma deve indicare consapevolmente l’uso della stima. La riga EUR è prequalificata come liquidità informativa e viene mostrata separatamente.
+
+Il saldo stimato viene registrato senza inventare una data originaria: `acquiredOn` è vuoto e `basisMethod` vale `estimated_average`. Non può coesistere con altri lotti iniziali della stessa crypto; per suddividerlo occorre ricostruire i lotti documentati. Gli acquisti successivi sono considerati più recenti del saldo iniziale. Per le porzioni iniziali si usa il prezzo medio confermato: i singoli lotti LIFO storici non sono ricostruiti e risultati e imposta sono indicativi. L’avvertenza compare nella pagina e nel PDF, anche dopo un ripristino CSV.
+
+Dopo l’importazione, aprire **Situazione iniziale → Modifica** sulla crypto per cambiare il prezzo medio stimato o la quantità. La modifica ricalcola le operazioni e l’imposta e resta segnalata come stima. Se si ottiene la documentazione, è possibile scegliere **Lotto documentato**, inserire una data originaria effettiva e il costo riconosciuto; per più acquisti vanno inseriti i singoli lotti con i dati reali. Non viene scelta una data di comodo.
+
+Il CSV ricaricabile versione 2 conserva anche la natura stimata: nelle righe `iniziale`, `dati_estesi` contiene `{"basisMethod":"estimated_average"}` e `data_acquisto_originale` resta vuota. La versione 1 non ammette questo caso. La modifica successiva e il ripristino non perdono la segnalazione della stima.
+
+## Costi e lotti documentati
 
 Un saldo aggregato e un valore di mercato non ricostruiscono i lotti LIFO. Per ogni posizione inserire i singoli acquisti originari ancora disponibili, con quantità residua, data e costo unitario fiscale documentato, esclusi commissioni e oneri accessori. La somma dei lotti deve coincidere esattamente con la quantità totale confermata per quella riga.
 
@@ -46,4 +56,4 @@ Il pulsante finale si abilita solo dopo le scelte esplicite, la riconciliazione 
 
 Se l'Excel viene aperto dalla verifica del CSV della piattaforma, quella verifica resta aperta e conserva classificazioni e rettifiche già salvate. Dopo la conferma dell'Excel, la sessione contiene subito i nuovi lotti; le operazioni del CSV richiedono ancora la propria conferma separata. Una rettifica CSV aperta deve essere salvata o annullata prima di aprire l'Excel.
 
-Dopo la conferma usare **Esporta dati**: il CSV ricaricabile conserva apertura e lotti importati con le date, quantità e costi confermati. Note, valori informativi, formule, prezzi di mercato e liquidità EUR dell'Excel non fanno parte del dataset fiscale esportato: conservare anche il prospetto originale. Le rettifiche dell'anteprima annullata non vengono conservate.
+Dopo la conferma usare **Esporta dati**: il CSV ricaricabile conserva apertura e lotti importati con le date, quantità e costi confermati e l’eventuale segnalazione di costo medio stimato. Note, valori informativi, formule, prezzi di mercato e liquidità EUR dell'Excel non fanno parte del dataset fiscale esportato: conservare anche il prospetto originale. Le rettifiche dell'anteprima annullata non vengono conservate.
