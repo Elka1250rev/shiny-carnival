@@ -539,6 +539,153 @@ async function verifyExchangeImport(page, label) {
   console.log(`PASS exchange-csv-${label}: explicit review, neutral swap, mixed EARN classifications and canonical v2 round trip.`);
 }
 
+// The CSV deliberately lists the first sale last: diagnostics must refer to its
+// original source line, while balances and gains follow the operation dates.
+const openingRecoverySource = [
+  exchangeSourceRow({ id: 'recovery-buy', datetime_tz_CET: '2025-07-02-12:00:00',
+    sent_amount: '20', sent_value_EUR: '20', received_amount: '2', received_value_EUR: '20' }),
+  exchangeSourceRow({ id: 'recovery-reward', datetime_tz_CET: '2025-07-03-12:00:00', type: 'Receive',
+    label: 'Reward', market_model_type: 'EARN', sent_amount: '0', sent_currency: '', sent_value_EUR: '0',
+    received_amount: '0.5', received_value_EUR: '5' }),
+  exchangeSourceRow({ id: 'recovery-sell', datetime_tz_CET: '2025-07-01-12:00:00', type: 'Sell',
+    sent_amount: '1', sent_currency: 'ALFA', sent_value_EUR: '15',
+    received_amount: '15', received_currency: 'EUR', received_value_EUR: '15' })
+];
+const recoveryQuantity = '0.750000000000000001';
+async function configureOpeningRecovery(page) {
+  await openExchangeReview(page, openingRecoverySource);
+  const review = page.locator('#exchange-review');
+  await review.getByLabel('Come inserire le operazioni', { exact: true }).selectOption('replace');
+  await review.getByLabel(/^Confermo data e ora come riportate nel CSV/).check();
+  await review.getByLabel(/^Confermo le quantità nette effettive del CSV/).check();
+  await review.getByLabel('Natura documentata dei premi', { exact: true }).selectOption('per_row');
+  await review.getByLabel('Costo fiscale documentato dei token ricevuti, per le vendite future', { exact: true }).selectOption('manual');
+  await review.locator('[data-source-line="3"]').click();
+  await review.getByLabel('Trattamento documentato di questo premio', { exact: true }).selectOption('holding_income');
+  await review.getByLabel('Quantità netta ricevuta', { exact: true }).fill(recoveryQuantity);
+  await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).fill('3.00');
+  await review.getByRole('button', { name: 'Salva rettifica', exact: true }).click();
+  return review;
+}
+async function assertOpeningReviewChoices(review) {
+  assert.equal(await review.getByLabel('Come inserire le operazioni', { exact: true }).inputValue(), 'replace');
+  assert.equal(await review.getByLabel(/^Confermo data e ora come riportate nel CSV/).isChecked(), true);
+  assert.equal(await review.getByLabel(/^Confermo le quantità nette effettive del CSV/).isChecked(), true);
+  assert.equal(await review.getByLabel('Natura documentata dei premi', { exact: true }).inputValue(), 'per_row');
+  assert.equal(await review.getByLabel('Costo fiscale documentato dei token ricevuti, per le vendite future', { exact: true }).inputValue(), 'manual');
+  await review.locator('[data-source-line="3"]').click();
+  assert.equal(await review.getByLabel('Trattamento documentato di questo premio', { exact: true }).inputValue(), 'holding_income');
+  assert.equal(await review.getByLabel('Quantità netta ricevuta', { exact: true }).inputValue(), recoveryQuantity);
+  assert.equal(await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).inputValue(), '3.00');
+  await review.getByRole('button', { name: 'Annulla rettifica', exact: true }).click();
+}
+async function verifyOpeningLotRecovery(page, label) {
+  const initial = dataset({ initialLots: [lot('RESIDUO', '1', '5')], transactions: [transaction('existing-purchase', {
+    date: '2025-01-02', asset: 'OMEGA', type: 'acquisto', unitPrice: '2'
+  })] });
+  await importDataset(page, initial, '', 1);
+  const original = await downloadSession(page, 'opening-recovery-' + label + '-before');
+  let review = await configureOpeningRecovery(page);
+  const addLot = () => review.getByRole('button', { name: 'Aggiungi un lotto di ALFA', exact: true });
+  await page.waitForFunction(() => /Riga 4:/.test(document.querySelector('#exchange-review .exchange-review-errors')?.textContent || ''));
+  assert.equal(await page.locator('#confirm-import').isDisabled(), true);
+  assert.match(await review.locator('.exchange-review-balance-check').textContent(), /ALFA: lo scarto massimo delle quantità è 1 ALFA/);
+
+  // An unfinished row correction cannot be discarded by opening the lot form.
+  await review.locator('[data-source-line="3"]').click();
+  await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).fill('999');
+  await addLot().click();
+  assert.equal(await page.locator('#entry-dialog').isVisible(), false);
+  assert.match(await review.locator('.exchange-review-errors').textContent(), /Salva o annulla la rettifica aperta/);
+  assert.equal(await review.getByLabel('Costo fiscale totale documentato del premio in EUR', { exact: true }).inputValue(), '999');
+  await review.getByRole('button', { name: 'Annulla rettifica', exact: true }).click();
+  await addLot().click();
+  const entry = page.locator('#entry-dialog');
+  await entry.waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#import-dialog').isVisible(), true, 'Adding a lot must keep the source review open underneath.');
+  assert.equal(await entry.getByLabel('Crypto / identificatore', { exact: true }).inputValue(), 'ALFA');
+  for (const name of ['Data originaria di acquisto', 'Quantità residua all’apertura', 'Costo unitario fiscale documentato (€)']) {
+    assert.equal(await entry.getByLabel(name, { exact: true }).inputValue(), '', 'The missing quantity, date and cost must never be guessed.');
+  }
+  const save = entry.getByRole('button', { name: 'Salva e ricalcola', exact: true });
+  await save.click();
+  assert.equal(await entry.isVisible(), true, 'Missing documented fields must block saving the lot.');
+  assert.equal(await entry.locator('form').evaluate(form => form.checkValidity()), false);
+  await entry.getByLabel('Data originaria di acquisto', { exact: true }).fill('2025-01-02');
+  await entry.getByLabel('Quantità residua all’apertura', { exact: true }).fill('1');
+  await entry.getByLabel('Costo unitario fiscale documentato (€)', { exact: true }).fill('10');
+  await save.click();
+  assert.equal(await entry.isVisible(), true, 'A lot acquired after the opening date must not be accepted.');
+  assert.equal(await entry.locator('form').evaluate(form => form.checkValidity()), false);
+  await entry.getByLabel('Data originaria di acquisto', { exact: true }).fill('2024-06-12');
+  await entry.getByLabel('Quantità residua all’apertura', { exact: true }).fill('0');
+  await save.click();
+  assert.equal(await entry.isVisible(), true, 'An invalid zero-quantity lot must not mutate the session.');
+  assert.equal(await page.locator('#entry-error').isVisible(), true);
+  await entry.getByRole('button', { name: 'Annulla', exact: true }).click();
+  await entry.waitFor({ state: 'hidden' });
+  await assertOpeningReviewChoices(review);
+  assert.equal(await page.locator('#confirm-import').isDisabled(), true);
+  await page.locator('#import-dialog').getByRole('button', { name: 'Annulla', exact: true }).click();
+  assert.equal(await downloadSession(page, 'opening-recovery-' + label + '-invalid-cancelled'), original,
+    'Blank, invalid and cancelled initial lots must leave the original recoverable session unchanged.');
+
+  // Saving a documented lot is an immediate session edit; cancelling the CSV
+  // afterwards must preserve the lot while leaving the old operations intact.
+  review = await configureOpeningRecovery(page);
+  await addLot().click();
+  await entry.waitFor({ state: 'visible' });
+  await entry.getByLabel('Data originaria di acquisto', { exact: true }).fill('2024-06-12');
+  await entry.getByLabel('Quantità residua all’apertura', { exact: true }).fill('1');
+  await entry.getByLabel('Costo unitario fiscale documentato (€)', { exact: true }).fill('10');
+  await save.click();
+  await entry.waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#import-dialog').isVisible(), true);
+  await page.waitForFunction(() => !document.getElementById('confirm-import').disabled);
+  assert.equal(await addLot().count(), 0, 'The shortage must be recomputed against the explicitly saved opening lot.');
+  assert.match(await review.locator('.exchange-review-balance-check').textContent(), /non richiede ulteriori saldi iniziali/);
+  await assertOpeningReviewChoices(review);
+  await page.waitForFunction(() => !document.getElementById('confirm-import').disabled);
+  await review.locator('.exchange-review-balance-check').scrollIntoViewIfNeeded();
+  await page.screenshot({ path: resolve(artifacts, 'opening-recovery-' + label + '-ready.png') });
+  await page.locator('#import-dialog').getByRole('button', { name: 'Annulla', exact: true }).click();
+  const withLot = parseCsv(await downloadSession(page, 'opening-recovery-' + label + '-lot-only'));
+  assert.deepEqual(withLot.transactions, initial.transactions, 'Saving a lot and cancelling the CSV must not apply any source operation.');
+  assert.equal(withLot.initialLots.length, 2);
+  assert.deepEqual(withLot.initialLots.find(row => row.asset === 'RESIDUO'), initial.initialLots[0]);
+  const documentedLot = withLot.initialLots.find(row => row.asset === 'ALFA');
+  assert.ok(documentedLot);
+  assert.equal(documentedLot.acquiredOn, '2024-06-12');
+  assert.equal(documentedLot.quantity, '1');
+  assert.equal(documentedLot.unitCost, '10');
+
+  review = await configureOpeningRecovery(page);
+  await page.waitForFunction(() => !document.getElementById('confirm-import').disabled);
+  await activateCanonicalImport(page);
+  await page.locator('#import-dialog').waitFor({ state: 'hidden' });
+  await page.locator('#tax-year').selectOption('2025');
+  await page.locator('#asset-filter').fill('');
+  assert.equal(await page.locator('#ledger-content tbody tr').count(), 3);
+  assert.match(await page.locator('#metric-net').textContent(), /10,00 €/);
+  assert.match(await page.locator('#metric-tax').textContent(), /2,60 €/);
+  const recovered = parseCsv(await downloadSession(page, 'opening-recovery-' + label + '-imported'));
+  assert.deepEqual(recovered.initialLots, withLot.initialLots);
+  assert.deepEqual(recovered.transactions.map(row => row.id), ['recovery-sell', 'recovery-buy', 'recovery-reward']);
+  for (const source of openingRecoverySource) {
+    assert.deepEqual(recovered.transactions.find(row => row.id === source.id).source.values, source);
+  }
+  const reward = recovered.transactions.find(row => row.id === 'recovery-reward');
+  assert.equal(reward.type, 'provento');
+  assert.equal(reward.quantity, recoveryQuantity);
+  assert.equal(reward.rewardCostEur, '3.00');
+  assert.equal(reward.source.decisions.rewardTreatment, 'holding_income');
+  assert.equal(reward.source.decisions.amountsPolicy, 'manual');
+  results.push({ name: 'opening-lot-recovery-' + label, operations: 3, originalSourceLineVerified: true,
+    missingFieldsNotGuessed: true, invalidAndCancelledLotsPreserveSession: true, reviewChoicesPreserved: true,
+    unsavedCorrectionProtected: true, cancelledCsvRetainsDocumentedLotOnly: true, sourceAndOverridesRoundTripVerified: true });
+  console.log(`PASS opening-lot-recovery-${label}: explicit historical lot, original source-line errors, preserved choices and recoverable session.`);
+}
+
 
 async function captureFailureDiagnostics(failure) {
   const report = {
@@ -688,6 +835,8 @@ try {
     assert.match(pdf.normalized, /Nessun realizzo; costo storico trasferito/);
     assert.match(pdf.normalized, /Provento imponibile 20,00 €/);
   });
+  await verifyOpeningLotRecovery(await newPage({ viewport: { width: 1280, height: 900 } }, 'opening-recovery-desktop'), 'desktop');
+  await verifyOpeningLotRecovery(await newPage(devices['Pixel 7'], 'opening-recovery-mobile'), 'mobile');
   assert.deepEqual(errors, [], 'The browser must not report JavaScript errors.');
   assert.deepEqual(externalRequests, [], 'PDF export must not send requests outside the local application.');
   for (const context of contexts) {
