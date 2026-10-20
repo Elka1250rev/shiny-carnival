@@ -112,7 +112,15 @@ export async function verifyOpeningXlsx({ page, label, artifacts, activateButton
   await openExchangeReview(page, csv);
   const exchange = page.locator('#exchange-review');
   await exchange.getByLabel('Come inserire le operazioni', { exact: true }).selectOption('append');
+  await page.waitForFunction(() => {
+    const text = document.querySelector('#exchange-review .exchange-review-errors')?.textContent || '';
+    return text.includes('(dateConfirmed)') && !text.includes('(mode)');
+  });
   await tap(exchange.getByLabel(/^Confermo data e ora come riportate nel CSV/));
+  await page.waitForFunction(() => {
+    const text = document.querySelector('#exchange-review .exchange-review-errors')?.textContent || '';
+    return text.includes('(grossValuesConfirmed)') && !text.includes('(dateConfirmed)');
+  });
   await tap(exchange.getByLabel(/^Confermo le quantità nette effettive del CSV/));
   await tap(exchange.getByRole('button', { name: 'Importa situazione iniziale da Excel', exact: true }));
   await upload();

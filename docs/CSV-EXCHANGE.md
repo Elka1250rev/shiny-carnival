@@ -36,6 +36,8 @@ Gli altri tipi o strutture incoerenti bloccano l'importazione senza escludere au
 
 ## Verifica prima dell'importazione
 
+Vicino a **Importa e ricalcola** compare lo stato della verifica, anche in fondo alle pagine dell'anteprima. Se l'importazione è bloccata, **Mostra verifiche** riporta agli avvisi e vi sposta il focus. Completare le conferme richieste e correggere i dati o i saldi segnalati; una rettifica aperta va salvata o annullata. Quando il file è valido, lo stato indica che è pronto e il pulsante si abilita. Questo comportamento vale anche su browser Android: il pulsante disabilitato non applica operazioni alla sessione.
+
 1. **Destinazione:** sostituire soltanto le operazioni conservando apertura, lotti iniziali e minusvalenze, oppure aggiungere operazioni di altre date. In aggiunta, una data già presente viene bloccata: il sito non può ricostruire la sequenza relativa fra gli orari exchange e le operazioni esistenti prive di orario.
 2. **Data e ora:** confermare i valori testuali `AAAA-MM-GG-HH:mm:ss`, senza conversione automatica di `CET`. Le righe sono ordinate per timestamp; a parità di secondo è mantenuto l'ordine nel file. La sequenza giornaliera è assegnata da 1. La conferma non stabilisce un offset legale o una conversione dell'ora estiva.
 3. **Importi fiscali:** verificare i controvalori lordi richiesti, mantenendo le quantità nette effettive. L'anteprima conserva entrambe le valorizzazioni EUR e permette rettifiche senza modificare le 17 stringhe di origine.

@@ -28,15 +28,16 @@ const importSession = createImportSession((content, name) => {
 let reviewedDataset = null;
 let reviewTimer;
 let addingImportLot = false;
+let importProblemTarget = null;
 const exchangeReview = createExchangeReview({ container: $('exchange-review'), onChange: () => {
   reviewedDataset = null;
-  $('confirm-import').disabled = true;
+  setImportState('Verifica dei dati in corso…');
   clearTimeout(reviewTimer);
   reviewTimer = setTimeout(reviewExchange, 120);
 }, onAddInitialLot: asset => {
   clearTimeout(reviewTimer);
   reviewedDataset = null;
-  $('confirm-import').disabled = true;
+  setImportState('Completa e verifica il lotto iniziale.');
   addingImportLot = true;
   openEntry('initialLots');
   $('field-asset').value = asset;
@@ -46,7 +47,7 @@ const exchangeReview = createExchangeReview({ container: $('exchange-review'), o
 }, onImportInitial: () => {
   clearTimeout(reviewTimer);
   reviewedDataset = null;
-  $('confirm-import').disabled = true;
+  setImportState('Completa la verifica della situazione iniziale.');
   openingImport.open();
 } });
 const openingImport = createOpeningImport({
@@ -374,6 +375,12 @@ function openImport() {
   showDialog('import-dialog');
   $('import-dialog').scrollTop = 0;
 }
+function setImportState(message, { ready = false, problemTarget = null } = {}) {
+  $('confirm-import').disabled = !ready;
+  $('import-action-status').textContent = message;
+  $('import-show-issues').hidden = !problemTarget;
+  importProblemTarget = problemTarget;
+}
 function resetImport() {
   clearTimeout(reviewTimer);
   reviewedDataset = null;
@@ -381,11 +388,11 @@ function resetImport() {
   importSession.reset();
   $('import-preview').hidden = true;
   $('import-error').hidden = true;
-  $('confirm-import').disabled = true;
+  setImportState('Scegli un file CSV per iniziare.');
 }
 function reviewExchange() {
   reviewedDataset = null;
-  $('confirm-import').disabled = true;
+  setImportState('Verifica dei dati in corso…');
   const selection = importSession.pending;
   if (selection?.kind !== 'exchange' || !exchangeReview.active) return;
   let candidate = null;
@@ -398,7 +405,7 @@ function reviewExchange() {
     exchangeReview.setErrors([]);
     $('import-preview').textContent = `Pronto: ${converted.dataset.transactions.length} operazioni totali. I lotti iniziali e le minusvalenze della sessione saranno conservati.`;
     $('import-preview').hidden = false;
-    $('confirm-import').disabled = false;
+    setImportState(`Pronto: ${converted.dataset.transactions.length} operazioni totali. Puoi importare e ricalcolare.`, { ready: true });
   } catch (error) {
     $('import-preview').hidden = true;
     const errors = error.errors?.map(entry => {
@@ -408,10 +415,14 @@ function reviewExchange() {
       return { ...entry, message: (entry.location ? friendlyLocation(entry.location) + ': ' : '') + entry.message };
     }) || [error.message];
     exchangeReview.setErrors(errors);
+    setImportState(`Importazione bloccata: ${errors.length} ${errors.length === 1 ? 'verifica da completare' : 'verifiche da completare'}.`, {
+      problemTarget: $('exchange-review').querySelector('.exchange-review-errors')
+    });
   }
 }
 async function readFile(file) {
   resetImport();
+  setImportState('Lettura e verifica del CSV in corso…');
   try {
     const selection = await importSession.read(file);
     if (!selection) return;
@@ -428,8 +439,12 @@ async function readFile(file) {
     details.textContent = `${imported.initialLots.length} lotti iniziali · ${imported.transactions.length} operazioni · ${imported.carryLosses.length} minusvalenze pregresse. Situazione iniziale: ${dateLabel(imported.openingDate)}. Verifica i costi dei vecchi file: le commissioni non sono deducibili fiscalmente.`;
     $('import-preview').append(heading, details);
     $('import-preview').hidden = false;
-    $('confirm-import').disabled = false;
-  } catch (error) { $('import-error').textContent = errorText(error); $('import-error').hidden = false; }
+    setImportState('File valido. Puoi importare e ricalcolare.', { ready: true });
+  } catch (error) {
+    $('import-error').textContent = errorText(error);
+    $('import-error').hidden = false;
+    setImportState('Importazione bloccata: il file contiene errori da correggere.', { problemTarget: $('import-error') });
+  }
 }
 
 document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { view = button.dataset.view; $('asset-filter').value = ''; renderLedger(); }));
@@ -458,6 +473,12 @@ $('import-button').addEventListener('click', openImport);
 $('opening-import-button').addEventListener('click', () => openingImport.open());
 $('import-dialog').addEventListener('close', resetImport);
 $('import-file').addEventListener('change', event => { if (event.target.files[0]) readFile(event.target.files[0]); else resetImport(); });
+$('import-show-issues').addEventListener('click', () => {
+  if (!importProblemTarget || importProblemTarget.hidden) return;
+  importProblemTarget.tabIndex = -1;
+  importProblemTarget.scrollIntoView({ block: 'start' });
+  importProblemTarget.focus({ preventScroll: true });
+});
 $('confirm-import').addEventListener('click', () => {
   const pending = importSession.pending;
   if (!pending) return;
@@ -468,7 +489,11 @@ $('confirm-import').addEventListener('click', () => {
     commit(next, 'Sessione importata. Tutti i risultati sono stati ricalcolati.');
     resetImport();
     $('import-dialog').close();
-  } catch (error) { $('import-error').textContent = errorText(error); $('import-error').hidden = false; }
+  } catch (error) {
+    $('import-error').textContent = errorText(error);
+    $('import-error').hidden = false;
+    setImportState('Importazione bloccata: verifica gli errori prima di riprovare.', { problemTarget: $('import-error') });
+  }
 });
 ['dragover', 'dragenter'].forEach(eventName => $('drop-zone').addEventListener(eventName, event => { event.preventDefault(); $('drop-zone').classList.add('dragover'); }));
 ['dragleave', 'drop'].forEach(eventName => $('drop-zone').addEventListener(eventName, event => { event.preventDefault(); $('drop-zone').classList.remove('dragover'); if (eventName === 'drop' && event.dataTransfer.files[0]) readFile(event.dataTransfer.files[0]); }));
