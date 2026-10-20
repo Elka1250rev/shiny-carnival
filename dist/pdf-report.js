@@ -18,6 +18,63 @@ function formatDecimal(value, places = 2, trim = false) {
 const money = value => formatDecimal(value) + ' €';
 const quantity = value => formatDecimal(value, 18, true);
 const pair = (label, value) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`;
+const unitCost = (value, exactSign = Decimal.from(value).cmp('0')) => exactSign > 0 && Decimal.from(Decimal.from(value).toFixed(18)).cmp('0') === 0
+  ? 'Inferiore a 0,000000000000000001 €' : quantity(value) + ' €';
+
+function openingSection(initialLots, openingDate) {
+  const available = Array.isArray(initialLots);
+  const lots = available ? [...initialLots].sort((left, right) => left.asset.localeCompare(right.asset)
+    || left.acquiredOn.localeCompare(right.acquiredOn) || left.order - right.order || left.id.localeCompare(right.id)) : [];
+  const assets = new Map();
+  for (const lot of lots) {
+    const current = assets.get(lot.asset) || { quantity: Decimal.from('0'), cost: Decimal.from('0'), estimated: false };
+    current.quantity = current.quantity.add(lot.quantity);
+    current.cost = current.cost.add(Decimal.from(lot.quantity).mul(lot.unitCost));
+    current.estimated ||= lot.basisMethod === 'estimated_average';
+    assets.set(lot.asset, current);
+  }
+  return {
+    title: 'Situazione iniziale al ' + dateLabel(openingDate),
+    note: 'Saldi originali all’apertura, prima delle operazioni. Il prezzo medio di carico è la media ponderata dei lotti dello stesso asset; il costo di una vendita deriva invece dai lotti ceduti in LIFO. I saldi aggregati stimati sono segnalati e non ricostruiscono i lotti storici.',
+    columns: ['Crypto', 'Quantità iniziale', 'Prezzo medio di carico (€ per unità)', 'Costo fiscale iniziale (€)'],
+    rows: [...assets].map(([asset, values]) => [asset + (values.estimated ? '\nCosto medio stimato' : ''),
+      quantity(values.quantity), unitCost(values.quantity.cmp('0') ? values.cost.div(values.quantity) : '0'), money(values.cost)]),
+    lotTitle: 'Lotti della situazione iniziale',
+    lotColumns: ['Crypto', 'Lotto / data originaria', 'Quantità iniziale', 'Costo unitario di carico (€)', 'Costo fiscale iniziale (€)'],
+    lotRows: lots.map(lot => [String(lot.asset), `${lot.id}\n${lot.basisMethod === 'estimated_average'
+      ? 'Saldo aggregato stimato · data originaria non disponibile'
+      : `Acquisto ${dateLabel(lot.acquiredOn)} · ordine ${lot.order}`}`,
+    quantity(lot.quantity), unitCost(lot.unitCost), money(Decimal.from(lot.quantity).mul(lot.unitCost))]),
+    emptyNote: available ? 'Non sono stati inseriti lotti nella situazione iniziale.'
+      : 'Il dettaglio della situazione iniziale non è disponibile in questo snapshot di calcolo.'
+  };
+}
+
+function operationLots(row, initialLotIds) {
+  if (!['vendita', 'permuta_imponibile', 'permuta_neutrale'].includes(row.type)) return null;
+  const lots = row.lotDetails || [];
+  const neutral = row.type === 'permuta_neutrale';
+  const cost = money(row.display?.costBasis ?? row.costBasis);
+  const result = row.display?.fiscalResult ?? row.fiscalResult;
+  const sign = row.display?.fiscalSign ?? (result === null ? 0 : Decimal.from(result).cmp('0'));
+  const signedResult = result === null ? '' : sign !== 0 && Decimal.from(Decimal.from(result).toFixed(2)).cmp('0') === 0
+    ? `${sign > 0 ? 'positivo' : 'negativo'} inferiore a 0,005 €`
+    : (sign > 0 ? '+' : '') + money(result);
+  return {
+    title: `Lotti ceduti in LIFO · ${dateLabel(row.date)} · sequenza ${row.order} · ${row.asset} · ${row.id}`,
+    columns: ['Lotto / data LIFO', 'Quantità ceduta', 'Costo unitario di carico (€)', 'Costo fiscale attribuito (€)'],
+    rows: lots.length ? lots.map(lot => {
+      const date = lot.acquiredOn ? `Data LIFO ${dateLabel(lot.acquiredOn)} · ordine ${lot.order}` : 'Data originaria non disponibile';
+      const origin = lot.provenance ? `\nDa permuta: ${lot.provenance.originAsset} · lotto ${lot.provenance.originLotId}` : '';
+      return [`${initialLotIds.has(lot.lotId) ? 'Lotto iniziale ' : 'Lotto '}${lot.lotId}\n${date}${lot.basisMethod === 'estimated_average' ? '\nCosto medio stimato' : ''}${origin}`,
+        quantity(lot.quantity), unitCost(lot.display?.unitCost ?? lot.unitCost, lot.display?.unitCostSign),
+        money(lot.display?.cost ?? lot.cost)];
+    }) : [['Dettaglio dei lotti non disponibile nello snapshot.', '—', '—', '—']],
+    total: `${neutral ? 'Costo storico trasferito' : 'Costo fiscale attribuito'}: ${cost}.`,
+    verification: neutral ? 'Permuta neutrale: il costo è trasferito alla crypto ricevuta senza realizzo fiscale.'
+      : `Verifica del risultato fiscale: ${money(row.display?.proceeds ?? row.proceeds)} − ${cost} = ${signedResult}.`
+  };
+}
 
 const documentedReward = row => row.type === 'acquisto' && !row.source?.derived
   && row.source?.decisions?.rewardTreatment === 'documented_acquisition';
@@ -99,6 +156,7 @@ function lossSections(tax) {
 /** Build a plain-text snapshot shared by HTML printing and downloadable PDFs. */
 export function buildPdfReportData(result, openingDate) {
   const { rows, tax } = result;
+  const initialLotIds = new Set((result.initialLots || []).map(lot => lot.id));
   const dates = rows.map(row => row.date).sort();
   const span = dates.length ? `Periodo delle operazioni: ${dateLabel(dates[0])} – ${dateLabel(dates.at(-1))}.` : 'Nessuna operazione inserita.';
   const hasHoldingIncome = rows.some(row => row.type === 'provento');
@@ -120,6 +178,7 @@ export function buildPdfReportData(result, openingDate) {
       `${span} Operazioni: ${rows.length}.`,
       'Il prospetto comprende tutte le operazioni della sessione, di tutti gli anni e di tutte le crypto, indipendentemente dai filtri a video.'
     ],
+    opening: openingSection(result.initialLots, openingDate),
     summaryTitle: 'Riepilogo fiscale · anno ' + tax.year,
     scope: [
       'Perimetro: persone fisiche residenti in Italia, fuori dall’attività d’impresa, in regime dichiarativo; compravendite di cripto-attività ordinarie contro euro, permute classificate esplicitamente e proventi da detenzione.',
@@ -129,13 +188,15 @@ export function buildPdfReportData(result, openingDate) {
     warnings: result.warnings.map(String),
     columns: ['Data / sequenza', 'Crypto', 'Tipo', 'Quantità', 'Commissioni', 'Corrispettivo / provento lordo (€)', 'Costo fiscale / trasferito (€)', 'Risultato fiscale (€)'],
     rows: rows.map(operationValues),
+    operationLots: rows.map(row => operationLots(row, initialLotIds)),
     notes: [
+      'La situazione iniziale apre il PDF; se non entra in una pagina prosegue nei fogli successivi. Il riepilogo per asset e i lotti iniziali riportano i saldi originari, anche se venduti in seguito. Ogni cessione riporta i lotti consumati in ordine LIFO, con la sola quantità ceduta e il costo attribuito a quella porzione.',
       'Gli acquisti non realizzano plusvalenze o minusvalenze. Per vendite e permute imponibili il risultato fiscale è il corrispettivo lordo o il valore normale ricevuto meno il costo fiscale attribuito con il metodo LIFO. Le commissioni manuali incidono solo sui risultati gestionali, ma non aumentano il costo fiscale e non riducono il corrispettivo fiscale.',
       'Per le commissioni importate sono riportati quantità, valuta e controvalore EUR originali. “Già compresa” indica che la commissione è già inclusa negli importi confermati e non va applicata nuovamente. Una “cessione separata” compare in una propria operazione e non si somma ai costi dell’operazione principale.',
       'Sono neutrali soltanto le permute tra cripto-attività con eguali caratteristiche e funzioni, secondo la classificazione confermata: non realizzano reddito e trasferiscono il costo storico ai lotti ricevuti. I depositi EUR sono informativi e non generano reddito.',
       'I proventi da detenzione sono imponibili al lordo alla ricezione. Per i proventi, la colonna del costo fiscale indica il costo documentato da usare per una cessione successiva: non è una deduzione dal reddito ricevuto e non viene assunto automaticamente pari a zero.',
       'I premi classificati come acquisti documentati usano il costo confermato. L’assenza di realizzo nel motore non certifica l’esenzione del premio: gli altri obblighi devono essere verificati.',
-      'Gli importi fiscali sono arrotondati ai centesimi per la lettura; le commissioni originali del file conservano tutte le cifre. I totali fiscali sono calcolati con la precisione del motore: possono differire dalla somma degli importi arrotondati delle singole operazioni.'
+      'Gli importi fiscali e i costi attribuiti sono arrotondati ai centesimi per la lettura; i costi unitari sono mostrati fino a 18 decimali e possono essere approssimati per le divisioni non finite. Le commissioni originali del file conservano tutte le cifre. I totali fiscali e i costi complessivi sono calcolati con la precisione del motore: possono differire dalla somma degli importi arrotondati delle singole operazioni o dei singoli lotti.'
     ],
     lossSections: lossSections(tax),
     recoveryNote: 'Questo PDF è un riepilogo e non può essere importato per riprendere la sessione. Usa “Esporta dati” per salvare il CSV ricaricabile. Il sito non registra i dati della sessione.',
@@ -150,12 +211,18 @@ export function buildPdfReportData(result, openingDate) {
 /** Build a printable snapshot of every calculated operation and the selected tax year. */
 export function buildPdfReport(result, openingDate) {
   const data = buildPdfReportData(result, openingDate);
+  const openingTable = (columns, rows) => `<table class="pdf-opening"><thead><tr class="pdf-opening-head">${columns.map(label => `<th scope="col">${escapeHtml(label)}</th>`).join('')}</tr></thead><tbody>${rows.map(cells => `<tr class="pdf-opening-row">${cells.map(cell => `<td>${escapeHtml(cell).replaceAll('\n', '<br>')}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  const opening = `<section class="pdf-opening-section"><h2>${escapeHtml(data.opening.title)}</h2><p class="pdf-note">${escapeHtml(data.opening.note)}</p>${data.opening.rows.length
+    ? openingTable(data.opening.columns, data.opening.rows) + `<h3>${escapeHtml(data.opening.lotTitle)}</h3>` + openingTable(data.opening.lotColumns, data.opening.lotRows)
+    : `<p class="pdf-note">${escapeHtml(data.opening.emptyNote)}</p>`}</section>`;
+  const lotDetail = detail => detail ? `<tr class="pdf-lot-details"><td colspan="8"><h3>${escapeHtml(detail.title)}</h3>${detail.rows.map(cells => `<p class="pdf-lot-line">${cells.map((cell, index) => `${escapeHtml(detail.columns[index])}: ${escapeHtml(cell).replaceAll('\n', '<br>')}`).join(' · ')}</p>`).join('')}<p><strong>${escapeHtml(detail.total)}</strong></p><p>${escapeHtml(detail.verification)}</p></td></tr>` : '';
   const operations = data.rows.length
-    ? `<table class="pdf-operations"><caption>Tutte le operazioni della sessione, in ordine cronologico</caption><thead><tr>${data.columns.map((label, index) => `<th scope="col"${index >= 3 ? ' class="numeric"' : ''}>${escapeHtml(label)}</th>`).join('')}</tr></thead><tbody>${data.rows.map(cells => `<tr>${cells.map((cell, index) => `<td${index >= 3 ? ' class="numeric"' : ''}>${index === 0 ? escapeHtml(cell).replace('\n', '<br><small>') + '</small>' : escapeHtml(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`
+    ? `<table class="pdf-operations"><caption>Tutte le operazioni della sessione, in ordine cronologico</caption><thead><tr>${data.columns.map((label, index) => `<th scope="col"${index >= 3 ? ' class="numeric"' : ''}>${escapeHtml(label)}</th>`).join('')}</tr></thead><tbody>${data.rows.map((cells, index) => `<tr>${cells.map((cell, index) => `<td${index >= 3 ? ' class="numeric"' : ''}>${index === 0 ? escapeHtml(cell).replace('\n', '<br><small>') + '</small>' : escapeHtml(cell)}</td>`).join('')}</tr>` + lotDetail(data.operationLots[index])).join('')}</tbody></table>`
     : `<p class="pdf-empty">${escapeHtml(data.emptyNote)}</p>`;
   const warnings = data.warnings.length ? `<section class="pdf-warnings"><h2>Avvertenze del calcolo</h2><ul>${data.warnings.map(warning => `<li>${escapeHtml(warning)}</li>`).join('')}</ul></section>` : '';
 
   return `<header class="pdf-header"><p>${escapeHtml(data.header[0])}</p><h1>${escapeHtml(data.title)}</h1>${data.header.slice(1).map(text => `<p>${escapeHtml(text)}</p>`).join('')}</header>
+${opening}
 <section aria-labelledby="pdf-tax-title"><h2 id="pdf-tax-title">${escapeHtml(data.summaryTitle)}</h2>${data.scope.map(text => `<p class="pdf-note">${escapeHtml(text)}</p>`).join('')}<dl class="pdf-summary">${data.summary.map(({ label, value }) => pair(label, value)).join('')}</dl></section>
 ${warnings}
 ${operations}

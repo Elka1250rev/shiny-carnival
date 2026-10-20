@@ -167,19 +167,136 @@ export async function buildPdfDocument(report, { document } = {}) {
   };
   const heading = (text, small = false) => textBlock(text, { size: small ? 10 : 12, isBold: true, color: GREEN, gap: 7, keepWithNext: 30 });
 
+  // Opening balances and the lots used by an individual disposal share the same
+  // bounded, paginated renderer. Every continuation retains its financial context.
+  const financialTable = async ({ title, columns, rows, proportions, numericFrom = 1, onNewPage, parentHeaderHeight = 0, footer = [] }) => {
+    if (!Array.isArray(columns) || !columns.length || !Array.isArray(rows)
+      || !Array.isArray(proportions) || proportions.length !== columns.length) {
+      throw new Error('Il riepilogo PDF contiene una tabella dei lotti non valida.');
+    }
+    const totalWidth = proportions.reduce((sum, width) => sum + width, 0);
+    const widths = proportions.map(width => width * WIDTH / totalWidth);
+    const size = 8.2;
+    const leading = 10.7;
+    const padding = 6;
+    const headers = columns.map((label, index) => wrap(label, widths[index] - padding * 2, 7.5, true));
+    const headerHeight = Math.max(...headers.map(lines => lines.length)) * 10 + padding * 2;
+    const titleHeight = wrap(title, WIDTH, 10, true).length * 13.5 + 6;
+    const availableOnFreshPage = PAGE[1] - 49 - BOTTOM - parentHeaderHeight - titleHeight - headerHeight;
+    const wrapRow = row => {
+      if (!Array.isArray(row) || row.length !== columns.length) throw new Error('Il riepilogo PDF contiene un lotto con colonne incomplete.');
+      return row.map((cell, index) => wrap(cell, widths[index] - padding * 2, size));
+    };
+    const firstCells = rows.length ? wrapRow(rows[0]) : null;
+    const firstRowHeight = firstCells ? Math.max(...firstCells.map(lines => lines.length)) * leading + padding * 2 : leading + padding * 2;
+    const drawContext = async () => {
+      await textBlock(title, { size: 10, isBold: true, color: GREEN, gap: 6 });
+      page.drawRectangle({ x: MARGIN, y: cursor - headerHeight, width: WIDTH, height: headerHeight, color: GREEN });
+      let x = MARGIN;
+      for (let index = 0; index < headers.length; index++) {
+        beginText(columns[index]);
+        for (let line = 0; line < headers[index].length; line++) await drawLine(headers[index][line], x + padding, cursor - padding - 7.5 - line * 10, 7.5, true, rgb(1, 1, 1));
+        endText();
+        x += widths[index];
+      }
+      cursor -= headerHeight;
+    };
+    const continuation = async () => {
+      newPage();
+      if (onNewPage) await onNewPage();
+      await drawContext();
+    };
+    // Reserve the measured first row, not just a single line: dates and lot
+    // provenance often wrap. Oversized rows may still continue on later pages.
+    if (cursor - titleHeight - headerHeight - Math.min(firstRowHeight, availableOnFreshPage) < BOTTOM) await continuation();
+    else await drawContext();
+    for (let rowIndex = 0; rowIndex < rows.length; rowIndex++) {
+      const row = rows[rowIndex];
+      const cells = rowIndex === 0 ? firstCells : wrapRow(row);
+      const lineCount = Math.max(...cells.map(lines => lines.length));
+      const height = lineCount * leading + padding * 2;
+      if (cursor - height < BOTTOM && height <= availableOnFreshPage) await continuation();
+      let offset = 0;
+      while (offset < lineCount) {
+        const count = Math.min(lineCount - offset, Math.floor((cursor - BOTTOM - padding * 2) / leading));
+        if (count <= 0) { await continuation(); continue; }
+        const partHeight = count * leading + padding * 2;
+        if (rowIndex % 2 === 0) page.drawRectangle({ x: MARGIN, y: cursor - partHeight, width: WIDTH, height: partHeight, color: PALE });
+        let x = MARGIN;
+        for (let index = 0; index < cells.length; index++) {
+          const part = cells[index].slice(offset, offset + count);
+          if (part.length) {
+            beginText(offset === 0 && count === lineCount ? row[index] : part.join('\n'));
+            for (let line = 0; line < part.length; line++) {
+              const lineWidth = measure(part[line], size, false);
+              const textX = index >= numericFrom ? x + widths[index] - padding - lineWidth : x + padding;
+              await drawLine(part[line], textX, cursor - padding - size - line * leading, size);
+            }
+            endText();
+          }
+          x += widths[index];
+        }
+        cursor -= partHeight;
+        page.drawLine({ start: { x: MARGIN, y: cursor }, end: { x: PAGE[0] - MARGIN, y: cursor }, thickness: 0.35, color: LINE });
+        offset += count;
+        if (offset < lineCount) await continuation();
+      }
+    }
+    cursor -= 5;
+    for (const value of footer.filter(value => value !== undefined && value !== null && value !== '')) {
+      const lines = wrap(value, WIDTH, 8.5);
+      const lineHeight = 11.5;
+      let offset = 0;
+      while (offset < lines.length) {
+        const count = Math.min(lines.length - offset, Math.floor((cursor - BOTTOM) / lineHeight));
+        if (count <= 0) { await continuation(); continue; }
+        const part = lines.slice(offset, offset + count);
+        beginText(offset === 0 && count === lines.length ? value : part.join('\n'));
+        for (const line of part) { await drawLine(line, MARGIN, cursor - 8.5, 8.5); cursor -= lineHeight; }
+        endText();
+        offset += count;
+        if (offset < lines.length) await continuation();
+      }
+      cursor -= 5;
+    }
+    cursor -= 7;
+  };
+
   newPage();
   await textBlock(report.title, { size: 19, isBold: true, color: GREEN, gap: 10 });
   for (const item of report.header) await textBlock(item, { size: 8.5, color: MUTED, gap: 4 });
   cursor -= 6;
-  await heading(report.summaryTitle);
-  for (const item of report.scope) await textBlock(item, { size: 8, color: MUTED, gap: 5 });
-
+  if (report.opening) {
+    const opening = report.opening;
+    if (opening.rows?.length) {
+      await financialTable({ title: opening.title, columns: opening.columns, rows: opening.rows,
+        proportions: [156, 173, 220, 225] });
+    } else {
+      await heading(opening.title);
+      await textBlock(opening.emptyNote || 'Nessun lotto iniziale inserito.', { size: 8.5, color: MUTED });
+    }
+    if (opening.note) await textBlock(opening.note, { size: 8, color: MUTED, gap: 8 });
+    if (opening.lotRows?.length) await financialTable({ title: opening.lotTitle || 'Lotti della situazione iniziale',
+      columns: opening.lotColumns, rows: opening.lotRows, proportions: [100, 230, 140, 152, 152], numericFrom: 2 });
+  }
   const cardWidth = WIDTH / 3;
+  const cardRows = [];
   for (let start = 0; start < report.summary.length; start += 3) {
     const cards = report.summary.slice(start, start + 3).map(item => ({
       ...item, labels: wrap(item.label, cardWidth - 18, 8), values: wrap(item.value, cardWidth - 18, 11, true)
     }));
     const height = Math.max(...cards.map(item => item.labels.length * 10 + item.values.length * 14 + 15));
+    cardRows.push({ cards, height });
+  }
+  // Opening inventory can fill most of page one. Keep the annual summary with
+  // its year and scope when the complete summary fits on a fresh page.
+  const summaryHeight = wrap(report.summaryTitle, WIDTH, 12, true).length * 16.2 + 7
+    + report.scope.reduce((height, item) => height + wrap(item, WIDTH, 8).length * 10.8 + 5, 0)
+    + cardRows.reduce((height, row) => height + row.height, 0) + 10;
+  if (summaryHeight <= PAGE[1] - 49 - BOTTOM && cursor - summaryHeight < BOTTOM) newPage();
+  await heading(report.summaryTitle);
+  for (const item of report.scope) await textBlock(item, { size: 8, color: MUTED, gap: 5 });
+  for (const { cards, height } of cardRows) {
     ensure(height);
     for (let index = 0; index < cards.length; index++) {
       const item = cards[index];
@@ -203,6 +320,9 @@ export async function buildPdfDocument(report, { document } = {}) {
   }
 
   if (report.rows.length) {
+    if (report.operationLots && (!Array.isArray(report.operationLots) || report.operationLots.length !== report.rows.length)) {
+      throw new Error('I dettagli dei lotti devono corrispondere alle operazioni del riepilogo PDF.');
+    }
     await heading('Tutte le operazioni della sessione');
     const proportions = [73, 76, 56, 116, 85, 109, 119, 140];
     const widths = proportions.map(width => width * WIDTH / 774);
@@ -225,13 +345,18 @@ export async function buildPdfDocument(report, { document } = {}) {
     ensure(headerHeight + 40);
     await drawHeader();
     const tablePage = async () => { newPage(); await drawHeader(); };
+    let needsHeader = false;
     for (let rowIndex = 0; rowIndex < report.rows.length; rowIndex++) {
       const row = report.rows[rowIndex];
       if (row.length !== widths.length) throw new Error('Il riepilogo PDF contiene un’operazione con colonne incomplete.');
       const cells = row.map((cell, index) => wrap(cell, widths[index] - padding * 2, size));
       const lineCount = Math.max(...cells.map(lines => lines.length));
       const height = lineCount * leading + padding * 2;
-      if (cursor - height < BOTTOM) await tablePage();
+      if (needsHeader) {
+        if (cursor - headerHeight - Math.min(height, PAGE[1] - 49 - headerHeight - BOTTOM) < BOTTOM) await tablePage();
+        else await drawHeader();
+        needsHeader = false;
+      } else if (cursor - height < BOTTOM) await tablePage();
       let offset = 0;
       while (offset < lineCount) {
         const count = Math.min(lineCount - offset, Math.floor((cursor - BOTTOM - padding * 2) / leading));
@@ -256,6 +381,14 @@ export async function buildPdfDocument(report, { document } = {}) {
         page.drawLine({ start: { x: MARGIN, y: cursor }, end: { x: PAGE[0] - MARGIN, y: cursor }, thickness: 0.35, color: LINE });
         offset += count;
         if (offset < lineCount) await tablePage();
+      }
+      const lots = report.operationLots?.[rowIndex];
+      if (lots) {
+        cursor -= 5;
+        await financialTable({ title: lots.title, columns: lots.columns, rows: lots.rows,
+          proportions: [346, 140, 144, 144], numericFrom: 1,
+          onNewPage: drawHeader, parentHeaderHeight: headerHeight, footer: [lots.total, lots.verification] });
+        needsHeader = true;
       }
     }
     cursor -= 12;

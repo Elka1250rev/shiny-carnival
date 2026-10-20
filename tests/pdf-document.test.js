@@ -131,3 +131,146 @@ test('unsupported Unicode without a browser fails explicitly instead of corrupti
 test('an incomplete row fails instead of silently dropping financial columns', async () => {
   await assert.rejects(buildPdfDocument(report({ rows: [['BTC']] })), /colonne incomplete/);
 });
+
+const opening = overrides => ({
+  title: 'Situazione iniziale al 01/01/2026',
+  columns: ['Crypto', 'Quantità iniziale', 'Prezzo medio di carico (€ / unità)', 'Costo fiscale iniziale (€)'],
+  rows: [['BTC', '3', '23,333333333333333333 €', '70,00 €']],
+  note: 'Il prezzo medio ponderato riepiloga i lotti iniziali; le cessioni usano il costo LIFO.',
+  lotTitle: 'Lotti della situazione iniziale',
+  lotColumns: ['Crypto', 'Lotto / data di acquisto', 'Quantità iniziale', 'Costo unitario di carico (€)', 'Costo fiscale totale (€)'],
+  lotRows: [['BTC', 'iniziale-vecchio · 01/01/2024', '1', '10 €', '10,00 €'],
+    ['BTC', 'iniziale-recente · 01/07/2024', '2', '30 €', '60,00 €']],
+  emptyNote: 'Nessun lotto iniziale inserito.',
+  ...overrides
+});
+const disposalLots = overrides => ({
+  title: 'Lotti ceduti in LIFO · 01/02/2026 · sequenza 1 · BTC',
+  columns: ['Lotto / data di acquisto', 'Quantità ceduta', 'Costo unitario (€)', 'Costo attribuito (€)'],
+  rows: [['iniziale-recente · 01/07/2024', '2', '30 €', '60,00 €'],
+    ['iniziale-vecchio · 01/01/2024', '1', '10 €', '10,00 €']],
+  total: 'Costo fiscale attribuito alla vendita: 70,00 €',
+  verification: 'Verifica: 150,00 € − 70,00 € = Plusvalenza +80,00 €',
+  ...overrides
+});
+
+test('the first page contains the opening assets and their original lot prices before the annual summary', async () => {
+  const input = report({ opening: opening(), rows: [] });
+  const output = await inspect(await buildPdfDocument(input));
+  const firstPage = output.pages[0].texts;
+  for (const text of [input.opening.title, ...input.opening.columns, ...input.opening.rows[0],
+    input.opening.lotTitle, ...input.opening.lotColumns, ...input.opening.lotRows.flat()]) {
+    assert.ok(firstPage.includes(text), `Opening data missing from page one: ${text}`);
+  }
+  assert.ok(output.texts.indexOf(input.opening.title) < output.texts.indexOf(input.summaryTitle));
+  assert.ok(output.texts.indexOf('iniziale-recente · 01/07/2024') < output.texts.indexOf(input.summaryTitle));
+  assert.ok(output.texts.includes(input.emptyNote), 'Opening inventory does not become a fictitious operation.');
+  assert.ok(!output.texts.includes(input.columns[0]), 'A session with only opening inventory needs no empty operations table.');
+});
+
+test('an empty opening is explicitly described on page one while the existing operations are retained', async () => {
+  const input = report({ opening: opening({ rows: [], lotRows: [] }) });
+  const output = await inspect(await buildPdfDocument(input));
+  assert.ok(output.pages[0].texts.includes(input.opening.title));
+  assert.ok(output.pages[0].texts.includes(input.opening.emptyNote));
+  assert.ok(output.texts.includes(input.rows[0][1]));
+});
+
+test('an opening section does not detach fiscal cards from the annual summary heading and scope', async () => {
+  const input = report({ opening: opening(), rows: [], summary: Array.from({ length: 9 }, (_, index) => ({
+    label: `Elemento fiscale ${index + 1}`, value: `${index + 1},00 €`
+  })) });
+  const output = await inspect(await buildPdfDocument(input));
+  const summaryPage = output.pages.find(page => page.texts.includes(input.summaryTitle));
+  assert.ok(summaryPage);
+  for (const text of [...input.scope, ...input.summary.flatMap(item => [item.label, item.value])]) {
+    assert.ok(summaryPage.texts.includes(text), `Fiscal summary detached from its heading: ${text}`);
+  }
+});
+
+test('long opening inventory repeats its lot header and preserves every original amount', async () => {
+  const initial = Array.from({ length: 120 }, (_, index) => ['BTC', `OPENING-${String(index).padStart(3, '0')} · 01/07/2024`,
+    '0,000000000000000001', '123456789012345678901234567890,123456789012345678 €', '0,000000000000000001 €']);
+  const input = report({ rows: [], opening: opening({ lotRows: initial }) });
+  const output = await inspect(await buildPdfDocument(input));
+  assert.ok(output.pages.length > 2);
+  assert.ok(output.pages[0].texts.includes(input.opening.title));
+  for (const expected of initial) {
+    const containingPage = output.pages.find(page => page.texts.includes(expected[1]));
+    assert.ok(containingPage, expected[1]);
+    assert.equal(output.texts.filter(text => text === expected[1]).length, 1);
+    for (const cell of expected) assert.ok(containingPage.texts.includes(cell), `Opening lot split unexpectedly: ${cell}`);
+    for (const label of input.opening.lotColumns) assert.ok(containingPage.texts.includes(label));
+    assert.ok(containingPage.texts.includes(input.opening.lotTitle));
+  }
+});
+
+test('each sale is followed by the quantities and prices of the actual lots before the next operation', async () => {
+  const first = ['01/02/2026\nSequenza 1', 'BTC-SALE-ONE', 'Vendita', '3', '0,00 €', '150,00 €', '70,00 €', 'Plusvalenza +80,00 €'];
+  const next = ['01/02/2026\nSequenza 2', 'BTC-NEXT-OPERATION', 'Acquisto', '1', '0,00 €', '—', '30,00 €', 'Nessun realizzo'];
+  const lots = disposalLots();
+  const output = await inspect(await buildPdfDocument(report({ rows: [first, next], operationLots: [lots, null] })));
+  for (const text of [...first, ...next, lots.title, ...lots.columns, ...lots.rows.flat(), lots.total]) assert.ok(output.texts.includes(text), text);
+  assert.ok(output.texts.includes(lots.verification.replace('−', '-')));
+  assert.ok(output.texts.indexOf(first[1]) < output.texts.indexOf(lots.title));
+  assert.ok(output.texts.indexOf(lots.title) < output.texts.indexOf(lots.total));
+  assert.ok(output.texts.indexOf(lots.total) < output.texts.indexOf(next[1]));
+});
+
+test('a sale consuming hundreds of lots keeps its identity, lot headers and financial verification on every continuation', async () => {
+  const details = disposalLots({
+    rows: Array.from({ length: 200 }, (_, index) => [`SOLD-LOT-${String(index).padStart(3, '0')} · 01/07/2024`, '1', '2 €', '2,00 €']),
+    total: 'Costo fiscale attribuito alla vendita: 400,00 €',
+    verification: 'Verifica: 1.000,00 € − 400,00 € = Plusvalenza +600,00 €'
+  });
+  const input = report({ rows: [['01/02/2026\nSequenza 1', 'BTC', 'Vendita', '200', '0,00 €', '1.000,00 €', '400,00 €', 'Plusvalenza +600,00 €']],
+    operationLots: [details] });
+  const output = await inspect(await buildPdfDocument(input));
+  assert.ok(output.pages.length > 3);
+  for (const expected of details.rows) {
+    const containingPage = output.pages.find(page => page.texts.includes(expected[0]));
+    assert.ok(containingPage, expected[0]);
+    assert.equal(output.texts.filter(text => text === expected[0]).length, 1);
+    assert.ok(containingPage.texts.includes(details.title), 'Every continuation identifies the sale whose cost is explained.');
+    for (const label of [...details.columns, ...input.columns]) assert.ok(containingPage.texts.includes(label), label);
+    for (const cell of expected) assert.ok(containingPage.texts.includes(cell));
+  }
+  assert.equal(output.texts.filter(text => text === details.total).length, 1);
+  assert.equal(output.texts.filter(text => text === details.verification.replace('−', '-')).length, 1);
+  assert.ok(output.texts.indexOf(details.rows.at(-1)[0]) < output.texts.indexOf(details.total));
+});
+
+test('a lot heading and its column labels stay with the actual multiline first row', async () => {
+  const details = disposalLots({
+    columns: ['Lotto / data', 'Quantità', 'Costo unitario', 'Costo attribuito'],
+    rows: [['LOT-FIRST\nAcquisto 01/01/2024\nOrigine documentata\nPorzione residua iniziale', '3', '23,333333333333333333 €', '70,00 €']]
+  });
+  const input = report({
+    warnings: Array.from({ length: 9 }, (_, index) => `Avvertenza sintetica ${index}`),
+    rows: [['01/02/2026\nSequenza 1', 'BTC', 'Vendita', '3', '0,00 €', '150,00 €', '70,00 €', 'Plusvalenza +80,00 €']],
+    operationLots: [details]
+  });
+  const output = await inspect(await buildPdfDocument(input));
+  const headingPages = output.pages.filter(page => page.texts.includes(details.title));
+  assert.equal(headingPages.length, 1, 'Do not leave an empty lot heading at the foot of the previous page.');
+  for (const text of [...details.columns, ...details.rows[0]]) assert.ok(headingPages[0].texts.includes(text), text);
+  assert.ok(!output.pages[0].texts.includes(details.title), 'The full heading and first row move together to the next page.');
+});
+
+test('very long opening labels continue without truncating text or losing their table context', async () => {
+  const longLabel = 'T'.repeat(5000);
+  const input = report({ rows: [], opening: opening({ lotRows: [[longLabel, 'long-label-lot · 01/01/2024', '1', '10 €', '10,00 €']] }) });
+  const output = await inspect(await buildPdfDocument(input));
+  const parts = output.texts.filter(text => /^[T\n]+$/.test(text));
+  assert.equal(parts.join('').replaceAll('\n', ''), longLabel);
+  for (const page of output.pages.filter(page => page.texts.some(text => /^[T\n]+$/.test(text)))) {
+    assert.ok(page.texts.includes(input.opening.lotTitle));
+    for (const label of input.opening.lotColumns) assert.ok(page.texts.includes(label));
+  }
+});
+
+test('incomplete opening lots or detached sale details fail explicitly', async () => {
+  await assert.rejects(buildPdfDocument(report({ opening: opening({ lotRows: [['BTC']] }) })), /lotto con colonne incomplete/);
+  await assert.rejects(buildPdfDocument(report({ operationLots: [] })), /dettagli dei lotti devono corrispondere/);
+  await assert.rejects(buildPdfDocument(report({ operationLots: [disposalLots({ rows: [['lot-only']] })] })), /lotto con colonne incomplete/);
+});
