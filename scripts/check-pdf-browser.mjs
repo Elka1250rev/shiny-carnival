@@ -144,6 +144,24 @@ async function activateButton(page, button, label = 'button') {
   const touch = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
   if (!touch) { await button.click(); return; }
   await button.scrollIntoViewIfNeeded();
+  // Debounced validation can insert an error summary above the editor. Wait for
+  // the measured control and visual viewport to settle before choosing tap coordinates.
+  // Do not retry a misplaced tap: the trusted-event assertions below still apply.
+  await button.evaluate(async element => {
+    const deadline = performance.now() + 3000;
+    let previous = '';
+    let stableSince = performance.now();
+    while (performance.now() < deadline) {
+      await new Promise(requestAnimationFrame);
+      const box = element.getBoundingClientRect();
+      const viewport = visualViewport;
+      const state = JSON.stringify([box.x, box.y, box.width, box.height,
+        viewport?.offsetLeft, viewport?.offsetTop, viewport?.width, viewport?.height, viewport?.scale]);
+      if (state !== previous) { previous = state; stableSince = performance.now(); }
+      else if (performance.now() - stableSince >= 200) return;
+    }
+    throw new Error('The touch target or visual viewport did not settle within three seconds.');
+  });
   await checkpointViewport(page, label + ':before-native-touch');
   assert.equal(await button.isEnabled(), true, 'Native touch must target an enabled control.');
   const target = await button.evaluate(element => {
