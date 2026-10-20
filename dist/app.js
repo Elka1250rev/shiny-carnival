@@ -18,7 +18,8 @@ let selectedYear = 2026;
 let view = 'transactions';
 let editing = null;
 const importSession = createImportSession((content, name) => {
-  if (String(content).split(/\r\n|\r|\n/, 1)[0].includes('datetime_tz_CET')) return { kind: 'exchange', source: parseExchangeCsv(content) };
+  const firstLine = String(content).replace(/^\uFEFF/, '').match(/[^\r\n]+/)?.[0] || '';
+  if (firstLine.includes('datetime_tz_CET')) return { kind: 'exchange', source: parseExchangeCsv(content) };
   const imported = parseImport(content, name);
   calculate(imported, Math.max(selectedYear, Number(imported.openingDate.slice(0, 4))));
   exportCsv(imported);

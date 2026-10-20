@@ -8,6 +8,9 @@ import { chromium, devices } from 'playwright';
 import { exportCsv, parseCsv } from '../dist/csv.js';
 import { EXCHANGE_CSV_COLUMNS } from '../dist/exchange-csv.js';
 import { verifyOpeningXlsx } from '../tests/browser/opening-xlsx.mjs';
+import { verifyImportValidation } from '../tests/browser/import-validation.mjs';
+import { verifyThirdAssetFee } from '../tests/browser/third-asset-fee.mjs';
+import { verifyXlsxTypes } from '../tests/browser/xlsx-types.mjs';
 
 // These fixtures are synthetic. No financial data or external service is used.
 const project = fileURLToPath(new URL('../', import.meta.url));
@@ -143,6 +146,24 @@ async function activateButton(page, button, label = 'button') {
   const touch = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
   if (!touch) { await button.click(); return; }
   await button.scrollIntoViewIfNeeded();
+  // Debounced validation can insert an error summary above the editor. Wait for
+  // the measured control and visual viewport to settle before choosing tap coordinates.
+  // Do not retry a misplaced tap: the trusted-event assertions below still apply.
+  await button.evaluate(async element => {
+    const deadline = performance.now() + 3000;
+    let previous = '';
+    let stableSince = performance.now();
+    while (performance.now() < deadline) {
+      await new Promise(requestAnimationFrame);
+      const box = element.getBoundingClientRect();
+      const viewport = visualViewport;
+      const state = JSON.stringify([box.x, box.y, box.width, box.height,
+        viewport?.offsetLeft, viewport?.offsetTop, viewport?.width, viewport?.height, viewport?.scale]);
+      if (state !== previous) { previous = state; stableSince = performance.now(); }
+      else if (performance.now() - stableSince >= 200) return;
+    }
+    throw new Error('The touch target or visual viewport did not settle within three seconds.');
+  });
   await checkpointViewport(page, label + ':before-native-touch');
   assert.equal(await button.isEnabled(), true, 'Native touch must target an enabled control.');
   const target = await button.evaluate(element => {
@@ -843,6 +864,11 @@ try {
   for (const [label, options] of [['desktop', { viewport: { width: 1280, height: 900 } }], ['mobile', devices['Pixel 7']]]) {
     await verifyOpeningXlsx({ page: await newPage(options, 'opening-xlsx-' + label), label, artifacts, activateButton, importDataset,
       downloadSession, openExchangeReview, exchangeSourceRow, results });
+    await verifyImportValidation({ page: await newPage(options, 'import-validation-' + label), label, activateButton, importDataset,
+      downloadSession, sourceCsv, exchangeSourceRow, results });
+    await verifyThirdAssetFee({ page: await newPage(options, 'third-asset-fee-' + label), label, activateButton, importDataset,
+      downloadSession, openExchangeReview, exchangeSourceRow, results });
+    await verifyXlsxTypes({ page: await newPage(options, 'xlsx-types-' + label), label, results });
   }
   assert.deepEqual(errors, [], 'The browser must not report JavaScript errors.');
   assert.deepEqual(externalRequests, [], 'PDF export must not send requests outside the local application.');

@@ -102,9 +102,10 @@ function classify(row) {
   }
 }
 
-function thirdAssetFee(values) {
-  return positive(values.fee_amount) && values.fee_currency !== 'EUR' && values.fee_currency !== values.sent_currency
-    && values.fee_currency !== values.received_currency;
+export function thirdAssetFee(values) {
+  return positive(values.fee_amount) && values.fee_currency !== 'EUR'
+    && !(positive(values.sent_amount) && values.fee_currency === values.sent_currency)
+    && !(positive(values.received_amount) && values.fee_currency === values.received_currency);
 }
 
 /** An inventory to present the decisions required before any conversion. */

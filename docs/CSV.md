@@ -14,6 +14,8 @@ Il CSV ricaricabile conserva la situazione iniziale, le operazioni e le minusval
 
 Il lettore gestisce virgolette doppie, separatori e ritorni a capo nei campi quotati. Una virgoletta interna è raddoppiata. La versione è uniforme in tutte le righe.
 
+La codifica UTF-8 è verificata prima di interpretare le colonne, anche per il CSV exchange. Un BOM UTF-8 iniziale è ammesso. Byte non validi bloccano l'importazione con una richiesta di riesportazione in UTF-8: non vengono sostituiti silenziosamente con altri caratteri, perché anche indirizzi e metadati originali devono restare fedeli al file. Un errore di lettura non modifica la sessione esistente.
+
 ## Versione 1 e compatibilità
 
 ```csv

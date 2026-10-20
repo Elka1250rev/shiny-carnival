@@ -205,6 +205,37 @@ test('third-asset fees require a choice and become a separate disposal only if e
   assert.equal(separate[1].source.values.id, 'source-1');
 });
 
+test('a currency on a zero-quantity leg cannot hide a separate crypto fee on a receipt or deposit', () => {
+  const fee = { sent_currency: 'GAMMA', fee_currency: 'GAMMA', fee_amount: '0.100000000000000001', fee_value_EUR: '2.50' };
+  const receipts = [
+    reward({ id: 'receipt-fee', received_amount: '1', received_value_EUR: '10', ...fee }),
+    sourceRow({ id: 'deposit-fee', type: 'Deposit', sent_amount: '0', sent_value_EUR: '0',
+      received_amount: '100', received_currency: 'EUR', received_value_EUR: '100', ...fee })
+  ];
+  for (const source of receipts) {
+    const input = parsed([source]);
+    const common = { rewardsTreatment: 'holding_income', rewardCostPolicy: 'zero_confirmed' };
+    assert.equal(analyzeExchangeCsv(input).thirdFeeCount, 1);
+    assert.throws(() => convertExchangeCsv(input, dataset(), options(common)), /terzo asset/);
+    const initial = dataset({ initialLots: [{ id: 'fee-opening', asset: 'GAMMA', acquiredOn: '2024-01-01',
+      order: 1, quantity: fee.fee_amount, unitCost: '10' }] });
+    const separate = convertExchangeCsv(input, initial, options({ ...common, thirdAssetFees: 'separate_taxable_disposal' })).dataset;
+    assert.equal(separate.transactions.length, 2);
+    assert.equal(separate.transactions[0].source.decisions.feePolicy, 'separate_taxable_disposal');
+    assert.deepEqual(separate.transactions[0].source.values, source);
+    const disposal = separate.transactions[1];
+    assert.deepEqual([disposal.id, disposal.type, disposal.asset, disposal.quantity, disposal.totalEur, disposal.order],
+      [source.id + '.fee', 'vendita', 'GAMMA', fee.fee_amount, fee.fee_value_EUR, 2]);
+    const result = calculate(separate, 2025);
+    assert.equal(result.rows[1].afterQuantity, '0');
+    assert.deepEqual(parseCsv(exportCsv(separate)), separate);
+    const included = convertExchangeCsv(input, initial, options({ ...common, thirdAssetFees: 'included_no_additional_movement' })).dataset;
+    assert.equal(included.transactions.length, 1);
+    assert.equal(included.transactions[0].source.decisions.feePolicy, 'already_included');
+    assert.equal(calculate(included, 2025).holdings.find(holding => holding.asset === 'GAMMA').quantity, fee.fee_amount);
+  }
+});
+
 test('derived fee ids fit 64 characters and collisions fail instead of replacing any record', () => {
   const longId = 'A'.repeat(59) + '😀😀';
   const input = sourceRow({ id: longId, fee_currency: 'GAMMA', fee_amount: '1', fee_value_EUR: '2' });

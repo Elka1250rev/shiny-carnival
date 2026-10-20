@@ -10,6 +10,8 @@ UTF-8, separatore virgola, con tutte queste colonne obbligatorie, anche riordina
 id,datetime_tz_CET,type,label,market_model_type,order_type,sent_amount,sent_currency,sent_value_EUR,sent_address,received_amount,received_currency,received_value_EUR,received_address,fee_amount,fee_currency,fee_value_EUR
 ```
 
+Il riconoscimento del formato usa la prima riga non vuota: un BOM UTF-8 e righe vuote prima delle intestazioni sono ammessi. Non vengono invece interpretate operazioni come intestazioni, né indovinate colonne mancanti. Byte non validi in UTF-8 bloccano l'importazione, senza sostituzioni di caratteri nei dati originali.
+
 Il lettore conserva le stringhe originali, i decimali e tutti i metadati. Le colonne duplicate o mancanti, gli ID duplicati e le righe non valide sono segnalati con la posizione nel file. Nessuna riga viene eliminata silenziosamente. Il contenuto dell'allegato personale non fa parte del repository o dei test: sono usati soltanto esempi sintetici.
 
 ## Quantità effettive e controvalori
@@ -41,6 +43,8 @@ Gli altri tipi o strutture incoerenti bloccano l'importazione senza escludere au
 5. **Date dei lotti neutrali:** scegliere esplicitamente data storica o data dello scambio. Il costo storico viene trasferito in entrambi i casi; la data incide sul LIFO futuro. Il sito non presenta uno dei criteri come una prescrizione espressa della legge.
 6. **Premi:** verificare la natura per ogni riga. Un provento da detenzione è imponibile lordo alla ricezione e richiede separatamente il costo fiscale documentato del token per le vendite successive. Un premio promozionale non viene dichiarato esente dal sito: può richiedere una diversa qualificazione e obblighi esterni al perimetro. La sua eventuale registrazione come ingresso con costo documentato non equivale a una certificazione della tassazione del premio. Il costo zero richiede una conferma esplicita, non viene inferito dall'assenza di pagamento.
 7. **Commissione in una terza crypto:** verificare se è già compresa senza ulteriore movimento oppure se costituisce un pagamento aggiuntivo di un servizio. Nel secondo caso viene generata una cessione separata della crypto usata per il servizio, al valore EUR documentato della commissione. La scelta non va fatta dal solo fatto che la valuta sia diversa.
+
+Per riconoscere una commissione in una terza crypto si considerano soltanto le valute effettivamente movimentate, con quantità positiva. Una valuta indicata sul lato inviato con `sent_amount=0` non rappresenta un'uscita e non nasconde una commissione in quella valuta. Per esempio, ricevere ALFA con quantità inviata zero, `sent_currency=GAMMA` e commissione in GAMMA richiede comunque la scelta esplicita sul movimento della commissione. Se si conferma un addebito aggiuntivo, anche il controllo preliminare delle disponibilità tiene conto dell'uscita GAMMA; nessuna quantità o costo iniziale viene inventato per coprirla.
 
 L'anteprima è paginata e consente di rettificare i dati della singola riga. I totali EUR esatti sono conservati direttamente: nessun totale è ricostruito da un prezzo unitario arrotondato. Per una permuta neutrale non si inserisce un nuovo costo al valore di mercato: viene trasferito quello storico dei lotti ceduti.
 

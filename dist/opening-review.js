@@ -1,5 +1,5 @@
 import { readXlsxWorkbook } from './xlsx-reader.js';
-import { parseOpeningSheet, sheetDecimal, openingDateForSnapshot, convertOpeningSnapshot } from './opening-import.js';
+import { parseOpeningSheet, openingUnitCost, openingDateForSnapshot, convertOpeningSnapshot } from './opening-import.js';
 
 const PAGE_SIZE = 5;
 
@@ -107,8 +107,7 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
         const controls = node('div', undefined, 'opening-actions');
         if (find('opening-value-meaning').value === 'unit_cost' && lots[row.row].length === 1) controls.append(action('Usa CRIPTO/EURO come costo di questo lotto', () => {
           try {
-            if (row.unitFormula !== null) throw new Error('CRIPTO/EURO contiene una formula: inserisci il costo documentato manualmente.');
-            lot.unitCost = sheetDecimal(row.unitValue);
+            lot.unitCost = openingUnitCost(row);
             lot.costOrigin = 'sheet';
             renderLots(); check();
           } catch (error) { message(error.message); }
@@ -122,7 +121,7 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
         if (count >= 5000) { message('Il limite è di 5.000 lotti complessivi.'); return; }
         for (const lot of lots[row.row]) if (lot.costOrigin === 'sheet') { lot.unitCost = ''; lot.costOrigin = 'manual'; }
         let cost = '';
-        if (estimated && row.unitFormula === null) { try { cost = sheetDecimal(row.unitValue); } catch { /* Editable below. */ } }
+        if (estimated) { try { cost = openingUnitCost(row); } catch { /* Editable below. */ } }
         lots[row.row].push({ acquiredOn: '', quantity: estimated ? quantities[row.row] : '', unitCost: cost, costOrigin: estimated ? 'estimate' : 'manual' });
         renderLots(); check();
       }));
@@ -143,7 +142,7 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
     find('confirm-opening-import').disabled = true;
     find('opening-review').hidden = true;
     const index = find('opening-sheet').value;
-    if (index === '') return;
+    if (index === '') { message('Seleziona il foglio da verificare.', false); return; }
     find('opening-snapshot-date').value = '';
     find('opening-timing').value = '';
     find('opening-value-meaning').value = 'estimated_average';
@@ -155,7 +154,7 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
       for (const row of source.rows) {
         quantities[row.row] = row.quantity;
         let estimatedCost = '';
-        try { if (row.unitFormula === null) estimatedCost = sheetDecimal(row.unitValue); } catch { /* Ask for a manual correction. */ }
+        try { estimatedCost = openingUnitCost(row); } catch { /* Ask for a manual correction. */ }
         if (row.asset !== 'EUR') lots[row.row] = /[1-9]/.test(row.quantity)
           ? [{ acquiredOn: '', quantity: row.quantity, unitCost: estimatedCost, costOrigin: 'estimate' }] : [];
       }
@@ -206,6 +205,7 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
   });
   find('opening-value-meaning').addEventListener('change', () => {
     if (!source) return;
+    find('opening-costs-confirm').checked = false;
     if (find('opening-value-meaning').value !== 'unit_cost') for (const rows of Object.values(lots)) for (const lot of rows) {
       if (lot.costOrigin === 'sheet' || lot.costOrigin === 'estimate') { lot.unitCost = ''; lot.costOrigin = 'manual'; }
     }
@@ -214,8 +214,8 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
     }
     if (find('opening-value-meaning').value === 'estimated_average') for (const row of source.rows) {
       const first = lots[row.row]?.[0];
-      if (first && lots[row.row].length === 1 && first.unitCost === '' && row.unitFormula === null) {
-        try { first.unitCost = sheetDecimal(row.unitValue); first.costOrigin = 'estimate'; } catch { /* Remain editable. */ }
+      if (first && lots[row.row].length === 1 && first.unitCost === '') {
+        try { first.unitCost = openingUnitCost(row); first.costOrigin = 'estimate'; } catch { /* Remain editable. */ }
       }
     }
     renderLots(); check();
