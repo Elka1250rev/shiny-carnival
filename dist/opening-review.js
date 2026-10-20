@@ -205,6 +205,7 @@ export function createOpeningImport({ dialog, getDataset, validate, apply, onClo
   });
   find('opening-value-meaning').addEventListener('change', () => {
     if (!source) return;
+    find('opening-costs-confirm').checked = false;
     if (find('opening-value-meaning').value !== 'unit_cost') for (const rows of Object.values(lots)) for (const lot of rows) {
       if (lot.costOrigin === 'sheet' || lot.costOrigin === 'estimate') { lot.unitCost = ''; lot.costOrigin = 'manual'; }
     }

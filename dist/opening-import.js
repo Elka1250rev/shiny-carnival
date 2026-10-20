@@ -57,7 +57,7 @@ export function parseOpeningSheet(sheet) {
     }
     const asset = key(assetCell.value);
     if (!usableCell(assetCell) || assetCell.formula !== null || !/^[\p{L}\p{N}][\p{L}\p{N} ._:/-]{0,49}$/u.test(asset)) fail(row.number, 'identificatore crypto mancante o non valido.');
-    if (!usableCell(quantityCell) || quantityCell.formula !== null) fail(row.number, 'la quantità deve essere un numero o testo numerico esplicito, senza formule, valori logici VERO/FALSO o errori Excel.');
+    if (!usableCell(quantityCell) || quantityCell.formula !== null) fail(row.number, 'la quantità deve essere un numero o testo numerico esplicito, senza formule, date, orari, durate, formati non riconosciuti, valori logici VERO/FALSO o errori Excel.');
     let quantity;
     try { quantity = sheetDecimal(quantityCell.value); }
     catch (error) { fail(row.number, 'TOTALE CRIPTO: ' + error.message); }
@@ -73,7 +73,7 @@ export function parseOpeningSheet(sheet) {
 
 export function openingUnitCost(row) {
   if (!['text', 'number'].includes(row.unitType) || row.unitFormula !== null) {
-    throw new Error('CRIPTO/EURO deve essere un numero o testo numerico esplicito, senza formule, valori logici o errori Excel. Inserisci manualmente il costo verificato.');
+    throw new Error('CRIPTO/EURO deve essere un numero o testo numerico esplicito, senza formule, date, orari, durate, formati non riconosciuti, valori logici o errori Excel. Inserisci manualmente il costo verificato.');
   }
   return sheetDecimal(row.unitValue);
 }

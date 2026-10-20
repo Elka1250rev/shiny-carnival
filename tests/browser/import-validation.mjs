@@ -56,6 +56,13 @@ export async function verifyImportValidation({ page, label, activateButton, impo
   assert.equal(await confirm.isDisabled(), true);
   await asset.getByLabel('Prezzo medio storico stimato (€)', { exact: true }).fill('12');
   await page.waitForFunction(() => !document.getElementById('confirm-opening-import').disabled);
+  await page.locator('#opening-value-meaning').selectOption('market');
+  assert.equal(await page.locator('#opening-costs-confirm').isChecked(), false, 'An attestation about estimated costs cannot confirm documented costs after the criterion changes.');
+  assert.equal(await asset.getByLabel('Costo unitario fiscale documentato (€)', { exact: true }).inputValue(), '12', 'The manual correction remains available for verification.');
+  await asset.getByLabel('Data originaria di acquisto', { exact: true }).fill('2024-06-01');
+  assert.equal(await confirm.isDisabled(), true, 'A valid date does not replace the renewed cost attestation.');
+  await tap(page.locator('#opening-costs-confirm'));
+  await page.waitForFunction(() => !document.getElementById('confirm-opening-import').disabled);
   await close();
 
   // The XML element order is irrelevant; Excel row coordinates determine the table.
@@ -147,6 +154,6 @@ export async function verifyImportValidation({ page, label, activateButton, impo
   await tap(page.locator('#import-dialog').getByRole('button', { name: 'Annulla', exact: true }));
   assert.equal(await downloadSession(page, 'import-validation-' + label + '-after'), original, 'Rejected and cancelled imports must preserve the entire prior session.');
   results.push({ name: 'import-validation-' + label, logicalValuesRejected: true, manualCostCorrection: true, headerAfterTitle: true,
-    rowCoordinatesRespected: true, readerBoundsVerified: true, lateReadsIsolated: true, strictUtf8: true, leadingEmptyCsvLines: true, originalSessionPreserved: true });
+    rowCoordinatesRespected: true, readerBoundsVerified: true, lateReadsIsolated: true, strictUtf8: true, leadingEmptyCsvLines: true, costMeaningReconfirmed: true, originalSessionPreserved: true });
   console.log(`PASS import-validation-${label}: malformed cells and files, reader bounds, stale reads and unchanged session.`);
 }

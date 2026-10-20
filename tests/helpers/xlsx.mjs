@@ -51,15 +51,15 @@ function column(index) {
   while (value) { value -= 1; result = String.fromCharCode(65 + value % 26) + result; value = Math.floor(value / 26); }
   return result;
 }
-export function makeWorkbook(sheets, { compressed = true, sharedStrings = false } = {}) {
+export function makeWorkbook(sheets, { compressed = true, sharedStrings = false, stylesXml = null } = {}) {
   const ns = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
   const shared = [];
   const sharedIndex = new Map();
   const entries = [
-    ['[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' + sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('') + (sharedStrings ? '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>' : '') + '</Types>'],
+    ['[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' + sheets.map((_, index) => `<Override PartName="/xl/worksheets/sheet${index + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>`).join('') + (sharedStrings ? '<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>' : '') + (stylesXml !== null ? '<Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>' : '') + '</Types>'],
     ['_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="book" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
     ['xl/workbook.xml', `<workbook xmlns="${ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((sheet, index) => `<sheet name="${xmlText(sheet.name)}" sheetId="${index + 1}" r:id="r${index + 1}"${sheet.hidden ? ' state="hidden"' : ''}/>`).join('')}</sheets></workbook>`],
-    ['xl/_rels/workbook.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="r${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')}${sharedStrings ? '<Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>' : ''}</Relationships>`]
+    ['xl/_rels/workbook.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="r${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')}${sharedStrings ? '<Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>' : ''}${stylesXml !== null ? '<Relationship Id="styles" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>' : ''}</Relationships>`]
   ];
   for (const [index, sheet] of sheets.entries()) {
     let worksheet = `<worksheet xmlns="${ns}"><sheetData>${sheet.rows.map((values, row) => `<row r="${row + 1}">${values.map((input, col) => {
@@ -67,13 +67,14 @@ export function makeWorkbook(sheets, { compressed = true, sharedStrings = false 
     let value = typeof input === 'object' ? input : { value: String(input), type: 'inlineStr' };
     if (sharedStrings && value.type === 'inlineStr') {
       if (!sharedIndex.has(value.value)) { sharedIndex.set(value.value, shared.length); shared.push(value.value); }
-      value = { type: 's', value: String(sharedIndex.get(value.value)) };
+      value = { ...value, type: 's', value: String(sharedIndex.get(value.value)) };
     }
-    return `<c r="${column(col)}${row + 1}" t="${value.type || 'n'}">${value.formula !== undefined ? `<f>${xmlText(value.formula)}</f>` : ''}${value.type === 'inlineStr' ? `<is><t>${xmlText(value.value)}</t></is>` : `<v>${xmlText(value.value)}</v>`}</c>`;
+    return `<c r="${column(col)}${row + 1}" t="${value.type || 'n'}"${value.style !== undefined ? ` s="${xmlText(value.style)}"` : ''}>${value.formula !== undefined ? `<f>${xmlText(value.formula)}</f>` : ''}${value.type === 'inlineStr' ? `<is><t>${xmlText(value.value)}</t></is>` : `<v>${xmlText(value.value)}</v>`}</c>`;
     }).join('')}</row>`).join('')}</sheetData></worksheet>`;
     if (sheet.transformXml) worksheet = sheet.transformXml(worksheet);
     entries.push([`xl/worksheets/sheet${index + 1}.xml`, worksheet]);
   }
   if (sharedStrings) entries.push(['xl/sharedStrings.xml', `<sst xmlns="${ns}">${shared.map(value => `<si><t>${xmlText(value)}</t></si>`).join('')}</sst>`]);
+  if (stylesXml !== null) entries.push(['xl/styles.xml', stylesXml]);
   return makeZip(entries, compressed);
 }

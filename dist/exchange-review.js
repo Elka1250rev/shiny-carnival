@@ -1,4 +1,4 @@
-import { analyzeExchangeCsv } from './exchange-import.js';
+import { analyzeExchangeCsv, thirdAssetFee } from './exchange-import.js';
 import { Decimal } from './decimal.js';
 
 const PAGE_SIZE = 50;
@@ -114,7 +114,7 @@ export function createExchangeReview({ container, onChange = () => {}, onAddInit
           const quantity = values.type === 'Trade' ? override.receivedQuantity || values.received_amount : override.quantity || values.received_amount;
           move(values.received_currency, number(quantity));
         }
-        if (options.thirdAssetFees === 'separate_taxable_disposal' && values.fee_currency !== values.sent_currency && values.fee_currency !== values.received_currency) move(values.fee_currency, zero.sub(number(values.fee_amount)));
+        if (options.thirdAssetFees === 'separate_taxable_disposal' && thirdAssetFee(values)) move(values.fee_currency, zero.sub(number(values.fee_amount)));
       }
       if (!missing.size) {
         paragraph(balanceBox, 'Controllo preliminare delle quantità: il CSV non richiede ulteriori saldi iniziali per le operazioni esaminate. La verifica completa di dati e costi avviene prima dell’importazione.');

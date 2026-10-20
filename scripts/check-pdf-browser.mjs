@@ -9,6 +9,8 @@ import { exportCsv, parseCsv } from '../dist/csv.js';
 import { EXCHANGE_CSV_COLUMNS } from '../dist/exchange-csv.js';
 import { verifyOpeningXlsx } from '../tests/browser/opening-xlsx.mjs';
 import { verifyImportValidation } from '../tests/browser/import-validation.mjs';
+import { verifyThirdAssetFee } from '../tests/browser/third-asset-fee.mjs';
+import { verifyXlsxTypes } from '../tests/browser/xlsx-types.mjs';
 
 // These fixtures are synthetic. No financial data or external service is used.
 const project = fileURLToPath(new URL('../', import.meta.url));
@@ -864,6 +866,9 @@ try {
       downloadSession, openExchangeReview, exchangeSourceRow, results });
     await verifyImportValidation({ page: await newPage(options, 'import-validation-' + label), label, activateButton, importDataset,
       downloadSession, sourceCsv, exchangeSourceRow, results });
+    await verifyThirdAssetFee({ page: await newPage(options, 'third-asset-fee-' + label), label, activateButton, importDataset,
+      downloadSession, openExchangeReview, exchangeSourceRow, results });
+    await verifyXlsxTypes({ page: await newPage(options, 'xlsx-types-' + label), label, results });
   }
   assert.deepEqual(errors, [], 'The browser must not report JavaScript errors.');
   assert.deepEqual(externalRequests, [], 'PDF export must not send requests outside the local application.');

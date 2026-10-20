@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readXlsxArchive } from '../dist/xlsx-reader.js';
+import { readXlsxArchive, classifyXlsxNumberFormat } from '../dist/xlsx-reader.js';
 import { makeZip } from './helpers/xlsx.mjs';
 
 test('stored and deflated XML is read locally with byte and CRC verification', async () => {
@@ -38,4 +38,24 @@ test('corrupt bytes and false uncompressed lengths are bounded and rejected', as
   const at = understated.readUInt32LE(understated.length - 6);
   understated.writeUInt32LE(1, at + 24);
   await assert.rejects(readXlsxArchive(understated).text('a.xml'), /dimensione/);
+});
+
+test('date, clock and elapsed-time formats cannot disguise stored serials as financial amounts', () => {
+  for (const format of ['dd/mm/yyyy', 'yyyy-mm-dd"T"hh:mm:ss', 'h:mm AM/PM', '[h]:mm:ss', '[mm]:ss', '[ss].00',
+    '[>=1]dd/mm/yyyy;0.00', '[$-411]ggge"年"m"月"d"日"']) {
+    assert.equal(classifyXlsxNumberFormat(format), 'date', format);
+  }
+});
+
+test('quoted currency text, escaped date letters and scientific notation remain numeric', () => {
+  for (const format of ['General', '#,##0.00', '0.00E+00', '##0.0E-0', '[$USD-409]#,##0.00',
+    '0.00 "USD"', '0\\m', '0_m', '0*m', '0.00;[Red](0.00);"-";"day month year"', '[DBNum1][$-804]General']) {
+    assert.equal(classifyXlsxNumberFormat(format), 'number', format);
+  }
+});
+
+test('incomplete formats and system date/time formats stay unclassified for explicit review', () => {
+  for (const format of ['0"unfinished', '[Red', '0\\', '0_', '0*', '[$-F800]', '[$-F400]', '0'.repeat(5001), null]) {
+    assert.equal(classifyXlsxNumberFormat(format), 'unknown', String(format).slice(0, 30));
+  }
 });
