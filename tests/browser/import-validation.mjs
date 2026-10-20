@@ -138,9 +138,15 @@ export async function verifyImportValidation({ page, label, activateButton, impo
   await page.locator('#import-error').waitFor({ state: 'visible' });
   assert.match(await page.locator('#import-error').textContent(), /CSV.*UTF-8 valido/);
   assert.equal(await page.locator('#confirm-import').isDisabled(), true);
+  const validSource = exchangeSourceRow({ received_address: 'metadati caffè' });
+  await page.locator('#import-file').setInputFiles({ name: 'leading-empty-lines.csv', mimeType: 'text/csv',
+    buffer: Buffer.from('\uFEFF\r\n\r\n' + sourceCsv([validSource])) });
+  await page.locator('#exchange-review').waitFor({ state: 'visible' });
+  assert.equal(await page.locator('#exchange-review .exchange-review-table tbody tr').count(), 1, 'A BOM and leading empty lines cannot hide the exchange header.');
+  assert.equal(await page.locator('#import-error').isVisible(), false);
   await tap(page.locator('#import-dialog').getByRole('button', { name: 'Annulla', exact: true }));
   assert.equal(await downloadSession(page, 'import-validation-' + label + '-after'), original, 'Rejected and cancelled imports must preserve the entire prior session.');
   results.push({ name: 'import-validation-' + label, logicalValuesRejected: true, manualCostCorrection: true, headerAfterTitle: true,
-    rowCoordinatesRespected: true, readerBoundsVerified: true, lateReadsIsolated: true, strictUtf8: true, originalSessionPreserved: true });
+    rowCoordinatesRespected: true, readerBoundsVerified: true, lateReadsIsolated: true, strictUtf8: true, leadingEmptyCsvLines: true, originalSessionPreserved: true });
   console.log(`PASS import-validation-${label}: malformed cells and files, reader bounds, stale reads and unchanged session.`);
 }

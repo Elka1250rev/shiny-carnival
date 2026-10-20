@@ -10,6 +10,8 @@ UTF-8, separatore virgola, con tutte queste colonne obbligatorie, anche riordina
 id,datetime_tz_CET,type,label,market_model_type,order_type,sent_amount,sent_currency,sent_value_EUR,sent_address,received_amount,received_currency,received_value_EUR,received_address,fee_amount,fee_currency,fee_value_EUR
 ```
 
+Il riconoscimento del formato usa la prima riga non vuota: un BOM UTF-8 e righe vuote prima delle intestazioni sono ammessi. Non vengono invece interpretate operazioni come intestazioni, né indovinate colonne mancanti. Byte non validi in UTF-8 bloccano l'importazione, senza sostituzioni di caratteri nei dati originali.
+
 Il lettore conserva le stringhe originali, i decimali e tutti i metadati. Le colonne duplicate o mancanti, gli ID duplicati e le righe non valide sono segnalati con la posizione nel file. Nessuna riga viene eliminata silenziosamente. Il contenuto dell'allegato personale non fa parte del repository o dei test: sono usati soltanto esempi sintetici.
 
 ## Quantità effettive e controvalori
