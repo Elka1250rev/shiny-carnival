@@ -3,6 +3,7 @@ import { Decimal } from './decimal.js';
 export const OPENING_COLUMNS = Object.freeze(['CRIPTOVALUTA', 'TOTALE CRIPTO', 'CRIPTO/EURO', 'EURO']);
 const key = value => String(value || '').trim().replace(/\s+/g, ' ').toUpperCase();
 const bounded = /^\d{1,30}(?:\.\d{1,18})?$/;
+const usableCell = cell => cell && ['text', 'number'].includes(cell.type);
 const fail = (row, message) => { throw new Error((row ? `Riga Excel ${row}: ` : '') + message); };
 
 /** Expand XML numeric spelling directly, without a floating-point conversion. */
@@ -22,14 +23,19 @@ export function sheetDecimal(raw) {
 
 export function parseOpeningSheet(sheet) {
   if (!sheet || !Array.isArray(sheet.rows)) throw new Error('Seleziona un foglio Excel valido.');
-  const headerIndex = sheet.rows.slice(0, 100).findIndex(row => Object.values(row.cells).some(cell => key(cell.value) === 'CRIPTOVALUTA'));
+  const candidates = sheet.rows.slice(0, 100).map((row, index) => ({ row, index,
+    names: new Set(Object.values(row.cells).map(cell => key(cell.value))) }));
+  // A one-word title is not the table header when a complete header follows.
+  const full = candidates.find(candidate => OPENING_COLUMNS.every(name => candidate.names.has(name)));
+  const partial = candidates.find(candidate => candidate.names.has('CRIPTOVALUTA'));
+  const headerIndex = (full || partial)?.index ?? -1;
   if (headerIndex < 0) throw new Error('Intestazioni non trovate: servono CRIPTOVALUTA, TOTALE CRIPTO, CRIPTO/EURO ed EURO.');
   const header = sheet.rows[headerIndex];
   const columns = {};
   for (const [column, cell] of Object.entries(header.cells)) {
     const name = key(cell.value);
     if (!name) continue;
-    if (cell.formula !== null || !OPENING_COLUMNS.includes(name)) fail(header.number, 'intestazione non riconosciuta: ' + name + '.');
+    if (!usableCell(cell) || cell.formula !== null || !OPENING_COLUMNS.includes(name)) fail(header.number, 'intestazione non riconosciuta: ' + name + '.');
     if (Object.hasOwn(columns, name)) fail(header.number, 'intestazione duplicata: ' + name + '.');
     columns[name] = Number(column);
   }
@@ -50,19 +56,26 @@ export function parseOpeningSheet(sheet) {
       continue;
     }
     const asset = key(assetCell.value);
-    if (assetCell.formula !== null || !/^[\p{L}\p{N}][\p{L}\p{N} ._:/-]{0,49}$/u.test(asset)) fail(row.number, 'identificatore crypto mancante o non valido.');
-    if (quantityCell.formula !== null || quantityCell.type === 'e') fail(row.number, 'la quantità deve essere un valore esplicito, senza formule o errori Excel.');
+    if (!usableCell(assetCell) || assetCell.formula !== null || !/^[\p{L}\p{N}][\p{L}\p{N} ._:/-]{0,49}$/u.test(asset)) fail(row.number, 'identificatore crypto mancante o non valido.');
+    if (!usableCell(quantityCell) || quantityCell.formula !== null) fail(row.number, 'la quantità deve essere un numero o testo numerico esplicito, senza formule, valori logici VERO/FALSO o errori Excel.');
     let quantity;
     try { quantity = sheetDecimal(quantityCell.value); }
     catch (error) { fail(row.number, 'TOTALE CRIPTO: ' + error.message); }
     rows.push({ row: row.number, asset, quantity, unitValue: unitCell.value,
-      unitFormula: unitCell.formula, totalValue: totalCell.value, totalFormula: totalCell.formula,
+      unitFormula: unitCell.formula, unitType: unitCell.type, totalValue: totalCell.value, totalFormula: totalCell.formula,
       source: { quantity: quantityCell.value, unitValue: unitCell.value, totalValue: totalCell.value } });
     if (rows.length > 5000) fail(row.number, 'il limite è di 5.000 posizioni.');
   }
   if (!rows.length) throw new Error('Il foglio non contiene posizioni dopo le intestazioni.');
   return { kind: 'opening-sheet', name: sheet.name, headerRow: header.number, rows, totals,
     notes: sheet.rows.slice(0, headerIndex).map(row => ({ row: row.number, text: Object.values(row.cells).map(cell => cell.value).filter(Boolean).join(' · ') })) };
+}
+
+export function openingUnitCost(row) {
+  if (!['text', 'number'].includes(row.unitType) || row.unitFormula !== null) {
+    throw new Error('CRIPTO/EURO deve essere un numero o testo numerico esplicito, senza formule, valori logici o errori Excel. Inserisci manualmente il costo verificato.');
+  }
+  return sheetDecimal(row.unitValue);
 }
 
 function date(value, label) {
@@ -93,6 +106,7 @@ function amount(value, label, positive = false) {
 export function convertOpeningSnapshot(source, current, options) {
   if (!source || source.kind !== 'opening-sheet' || !Array.isArray(source.rows)) throw new Error('Seleziona una tabella iniziale valida.');
   const openingDate = openingDateForSnapshot(options?.snapshotDate, options?.timing);
+  if (!['estimated_average', 'market', 'average_cost', 'unit_cost'].includes(options.valueMeaning)) throw new Error('Conferma il significato di CRIPTO/EURO scegliendo uno dei criteri disponibili.');
   const estimated = options.valueMeaning === 'estimated_average';
   if (options.replaceConfirmed !== true) throw new Error('Conferma la sostituzione dei lotti iniziali e della data di apertura.');
   if (options.costsConfirmed !== true) throw new Error(estimated ? 'Conferma l’uso dei prezzi medi storici stimati e dei saldi aggregati: i risultati saranno indicativi.' : 'Conferma quantità, date originarie e costi fiscali documentati dei lotti.');

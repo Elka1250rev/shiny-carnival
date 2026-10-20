@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { sheetDecimal, parseOpeningSheet, openingDateForSnapshot, convertOpeningSnapshot, OPENING_COLUMNS } from '../dist/opening-import.js';
+import { sheetDecimal, parseOpeningSheet, openingUnitCost, openingDateForSnapshot, convertOpeningSnapshot, OPENING_COLUMNS } from '../dist/opening-import.js';
 import { calculate, validateDataset } from '../dist/engine.js';
 import { buildPdfReportData } from '../dist/pdf-report.js';
 import { exportCsv, parseCsv } from '../dist/csv.js';
@@ -12,7 +12,7 @@ const table = () => ({ name: 'Saldi inventati', rows: [row(1, ['SALDI AL 31.12.2
   row(6, ['', 'TOTALE VALORE CRIPTO IN EURO:', '', cell('2780', 'SUM(D4:D5)')])] });
 const current = version => ({ version: version || 1, openingDate: '2025-01-01', initialLots: [{ id: 'old', asset: 'OLD', acquiredOn: '2024-01-01', order: 1, quantity: '1', unitCost: '4' }],
   transactions: [{ id: 'sale', asset: 'ALFA', date: '2025-01-03', order: 1, type: 'vendita', quantity: '1', unitPrice: '25', fees: '0' }], carryLosses: [{ id: 'loss', year: 2024, amount: '2' }] });
-const options = overrides => ({ snapshotDate: '2024-12-31', timing: 'end', replaceConfirmed: true, costsConfirmed: true, euroConfirmed: true, idPrefix: 'synthetic',
+const options = overrides => ({ snapshotDate: '2024-12-31', timing: 'end', valueMeaning: 'market', replaceConfirmed: true, costsConfirmed: true, euroConfirmed: true, idPrefix: 'synthetic',
   lots: { 4: [{ acquiredOn: '2024-04-10', quantity: '1', unitCost: '10' }, { acquiredOn: '2024-07-12', quantity: '2', unitCost: '20' }] }, ...overrides });
 
 test('headers can follow notes and blank rows; totals and original values remain informative', () => {
@@ -21,6 +21,14 @@ test('headers can follow notes and blank rows; totals and original values remain
   assert.equal(parsed.rows[0].unitValue, '900'); assert.equal(parsed.rows[0].totalFormula, 'PRODUCT(B4:C4)');
   assert.match(parsed.notes[0].text, /31\.12\.2024/);
   assert.equal('snapshotDate' in parsed, false, 'The heading must not silently supply the snapshot date.');
+});
+test('a title containing CRIPTOVALUTA cannot hide the complete table header below it', () => {
+  const input = table();
+  input.rows[0] = row(1, ['CRIPTOVALUTA']);
+  const parsed = parseOpeningSheet(input);
+  assert.equal(parsed.headerRow, 3);
+  assert.deepEqual(parsed.rows.map(item => item.asset), ['ALFA', 'EUR']);
+  assert.equal(parsed.notes[0].text, 'CRIPTOVALUTA');
 });
 test('reordered columns work while missing, duplicate and unknown headers are rejected', () => {
   const reversed = { name: 'Reverse', rows: [row(1, [...OPENING_COLUMNS].reverse()), row(2, ['600', '300', '2', 'BETA'])] };
@@ -35,6 +43,33 @@ test('ambiguous extra rows and formulas in quantities are never silently skipped
   assert.throws(() => parseOpeningSheet(extra), /Riga Excel 7/);
   const computed = table(); computed.rows[2].cells[2] = cell('3', 'SUM(A1:A9)');
   assert.throws(() => parseOpeningSheet(computed), /senza formule/);
+});
+test('Excel logical values, dates and errors cannot become quantities or asset identifiers', () => {
+  for (const type of ['b', 'e', 'd', 'unsupported']) {
+    const quantity = table();
+    quantity.rows[2].cells[2] = { type, value: '1', formula: null };
+    assert.throws(() => parseOpeningSheet(quantity), /Riga Excel 4: la quantità/);
+    const asset = table();
+    asset.rows[2].cells[1] = { type, value: '1', formula: null };
+    assert.throws(() => parseOpeningSheet(asset), /Riga Excel 4: identificatore/);
+  }
+});
+test('unsafe source costs require a manual correction rather than silently copying a cached digit', () => {
+  for (const sourceCell of [
+    ...['b', 'e', 'd', 'unsupported'].map(type => ({ type, value: '1', formula: null })),
+    { type: 'number', value: '1', formula: 'SUM(B1:B3)' }
+  ]) {
+    const input = table(); input.rows[2].cells[3] = sourceCell;
+    const parsed = parseOpeningSheet(input);
+    assert.throws(() => openingUnitCost(parsed.rows[0]), /Inserisci manualmente/);
+    const corrected = convertOpeningSnapshot(parsed, current(), options({ valueMeaning: 'estimated_average',
+      lots: { 4: [{ quantity: '3', unitCost: '12' }] } }));
+    assert.equal(corrected.initialLots[0].unitCost, '12');
+    assert.equal(corrected.initialLots[0].basisMethod, 'estimated_average');
+  }
+  for (const type of ['text', 'number']) {
+    assert.equal(openingUnitCost({ unitType: type, unitValue: '1.23456789012345678E-1', unitFormula: null }), '0.123456789012345678');
+  }
 });
 test('scientific numeric strings expand exactly and formatting never rounds quantities', () => {
   assert.equal(sheetDecimal('1.23456789012345678E-1'), '0.123456789012345678');
@@ -65,7 +100,7 @@ test('market values do not become cost; documented split lots drive LIFO and CSV
 });
 test('date, confirmations, per-lot costs and quantity reconciliation block incomplete imports', () => {
   const source = parseOpeningSheet(table());
-  for (const overrides of [{ snapshotDate: '' }, { replaceConfirmed: false }, { costsConfirmed: false }, { euroConfirmed: false }, { lots: {} },
+  for (const overrides of [{ snapshotDate: '' }, { valueMeaning: undefined }, { valueMeaning: 'unknown' }, { replaceConfirmed: false }, { costsConfirmed: false }, { euroConfirmed: false }, { lots: {} },
     { lots: { 4: [{ acquiredOn: '', quantity: '3', unitCost: '10' }] } },
     { lots: { 4: [{ acquiredOn: '2025-01-01', quantity: '3', unitCost: '10' }] } },
     { lots: { 4: [{ acquiredOn: '2024-01-01', quantity: '3', unitCost: '' }] } },

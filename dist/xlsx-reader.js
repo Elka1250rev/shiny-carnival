@@ -159,9 +159,9 @@ export async function readXlsxWorkbook(input) {
     let cellsCount = 0;
     for (const row of children(data, 'row')) {
       const number = Number(row.getAttribute('r'));
-      if (!Number.isSafeInteger(number) || number < 1 || rowNumbers.has(number)) throw invalid('numerazione delle righe non valida.');
+      if (!Number.isSafeInteger(number) || number < 1 || number > 1048576 || rowNumbers.has(number)) throw invalid('numerazione delle righe non valida.');
       rowNumbers.add(number);
-      if (rows.length >= 10000) throw invalid('troppi record nel foglio (massimo 10.000 righe).');
+      if (rowNumbers.size > 10000) throw invalid('troppi record nel foglio (massimo 10.000 righe, incluse quelle vuote).');
       const cells = {};
       for (const cell of children(row, 'c')) {
         if (++cellsCount > 30000) throw invalid('troppe celle nel foglio (massimo 30.000).');
@@ -172,18 +172,21 @@ export async function readXlsxWorkbook(input) {
         for (const character of match[1]) column = column * 26 + character.charCodeAt(0) - 64;
         if (column > 64 || Object.hasOwn(cells, column)) throw invalid('colonna fuori limite o duplicata.');
         const type = cell.getAttribute('t') || 'n';
+        if (!['n', 's', 'inlineStr', 'str', 'b', 'd', 'e'].includes(type)) throw invalid('tipo di cella non riconosciuto: ' + reference + '.');
         const formula = child(cell, 'f')?.textContent ?? null;
         const raw = child(cell, 'v')?.textContent ?? '';
         let value = raw;
         if (type === 's') {
-          if (!/^\d+$/.test(raw) || !Object.hasOwn(shared, raw)) throw invalid('testo condiviso non valido.');
-          value = shared[Number(raw)];
+          const index = Number(raw);
+          if (!/^\d+$/.test(raw) || !Number.isSafeInteger(index) || !Object.hasOwn(shared, index)) throw invalid('testo condiviso non valido.');
+          value = shared[index];
         } else if (type === 'inlineStr') value = richText(child(cell, 'is') || cell);
         if (value.length > 5000) throw invalid('testo di cella troppo lungo.');
         cells[column] = { reference, value, type: ['s', 'inlineStr', 'str'].includes(type) ? 'text' : type === 'n' ? 'number' : type, formula };
       }
       if (Object.values(cells).some(cell => cell.value !== '' || cell.formula !== null)) rows.push({ number, cells });
     }
+    rows.sort((left, right) => left.number - right.number);
     result.push({ name, hidden: ['hidden', 'veryHidden'].includes(sheet.getAttribute('state')), rows });
   }
   return { kind: 'opening-xlsx', sheets: result };

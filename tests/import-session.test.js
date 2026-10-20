@@ -7,7 +7,10 @@ import { calculate } from '../dist/engine.js';
 function deferredFile(name = 'sessione.csv') {
   let resolve, reject;
   const content = new Promise((yes, no) => { resolve = yes; reject = no; });
-  return { name, size: 100, text: () => content, resolve, reject };
+  return { name, size: 100, arrayBuffer: async () => {
+    const value = await content;
+    return typeof value === 'string' ? new TextEncoder().encode(value).buffer : value;
+  }, resolve, reject };
 }
 function snapshot(asset) {
   return { version: 1, openingDate: '2025-01-01', transactions: [], carryLosses: [],
@@ -98,7 +101,7 @@ test('an oversized file is refused before reading and clears the previous snapsh
   const first = deferredFile();
   first.resolve(exportCsv(snapshot('BTC')));
   await importer.read(first);
-  await assert.rejects(importer.read({ size: 5 * 1024 * 1024 + 1, text: () => assert.fail('File troppo grande letto') }), /5 MB/);
+  await assert.rejects(importer.read({ size: 5 * 1024 * 1024 + 1, arrayBuffer: () => assert.fail('File troppo grande letto') }), /5 MB/);
   assert.equal(importer.pending, null);
 });
 
@@ -109,5 +112,40 @@ test('chronologically invalid data cannot become an importable snapshot', async 
   data.transactions.push({ id: 'vendita', date: '2026-01-01', order: 1, type: 'vendita', asset: 'BTC', quantity: '2', unitPrice: '200', fees: '0' });
   file.resolve(exportCsv(data));
   await assert.rejects(importer.read(file), error => error.name === 'ValidationError');
+  assert.equal(importer.pending, null);
+});
+
+test('invalid UTF-8 cannot silently replace original characters and clears the previous preview', async () => {
+  const importer = session();
+  const valid = deferredFile(); valid.resolve(exportCsv(snapshot('BTC')));
+  await importer.read(valid);
+  const bytes = new TextEncoder().encode(exportCsv(snapshot('ETH')));
+  bytes[bytes.indexOf('E'.charCodeAt(0))] = 0xff;
+  const invalid = deferredFile(); invalid.resolve(bytes.buffer);
+  await assert.rejects(importer.read(invalid), /CSV.*UTF-8 valido/);
+  assert.equal(importer.pending, null);
+});
+
+test('UTF-8 BOM and accented asset identifiers survive import without replacement characters', async () => {
+  const importer = session();
+  const file = deferredFile(); file.resolve('\uFEFF' + exportCsv(snapshot('CAFFÈ')));
+  assert.deepEqual((await importer.read(file)).dataset, snapshot('CAFFÈ'));
+});
+
+test('a stale invalid encoding cannot clear the latest valid selection', async () => {
+  const importer = session();
+  const first = deferredFile(), last = deferredFile();
+  const firstRead = importer.read(first), lastRead = importer.read(last);
+  last.resolve(exportCsv(snapshot('ETH')));
+  await lastRead;
+  first.resolve(new Uint8Array([0xff]).buffer);
+  assert.equal(await firstRead, null);
+  assert.deepEqual(importer.pending, snapshot('ETH'));
+});
+
+test('the byte limit is verified after reading even if the file metadata understates its size', async () => {
+  const importer = session();
+  const file = deferredFile(); file.resolve(new ArrayBuffer(5 * 1024 * 1024 + 1));
+  await assert.rejects(importer.read(file), /5 MB/);
   assert.equal(importer.pending, null);
 });

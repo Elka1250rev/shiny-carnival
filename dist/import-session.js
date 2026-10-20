@@ -10,8 +10,12 @@ export function createImportSession(parse) {
       pending = null;
       try {
         if (file.size > 5 * 1024 * 1024) throw new Error('Il file supera il limite di 5 MB.');
-        const content = await file.text();
+        const bytes = await file.arrayBuffer();
         if (request !== revision) return null;
+        if (bytes.byteLength > 5 * 1024 * 1024) throw new Error('Il file supera il limite di 5 MB.');
+        let content;
+        try { content = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+        catch { throw new Error('Il CSV non è un file UTF-8 valido. Esportalo nuovamente in UTF-8: nessun dato è stato importato.'); }
         const dataset = parse(content, file.name);
         pending = dataset;
         return { dataset, name: file.name };

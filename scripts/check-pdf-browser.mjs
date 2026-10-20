@@ -8,6 +8,7 @@ import { chromium, devices } from 'playwright';
 import { exportCsv, parseCsv } from '../dist/csv.js';
 import { EXCHANGE_CSV_COLUMNS } from '../dist/exchange-csv.js';
 import { verifyOpeningXlsx } from '../tests/browser/opening-xlsx.mjs';
+import { verifyImportValidation } from '../tests/browser/import-validation.mjs';
 
 // These fixtures are synthetic. No financial data or external service is used.
 const project = fileURLToPath(new URL('../', import.meta.url));
@@ -843,6 +844,8 @@ try {
   for (const [label, options] of [['desktop', { viewport: { width: 1280, height: 900 } }], ['mobile', devices['Pixel 7']]]) {
     await verifyOpeningXlsx({ page: await newPage(options, 'opening-xlsx-' + label), label, artifacts, activateButton, importDataset,
       downloadSession, openExchangeReview, exchangeSourceRow, results });
+    await verifyImportValidation({ page: await newPage(options, 'import-validation-' + label), label, activateButton, importDataset,
+      downloadSession, sourceCsv, exchangeSourceRow, results });
   }
   assert.deepEqual(errors, [], 'The browser must not report JavaScript errors.');
   assert.deepEqual(externalRequests, [], 'PDF export must not send requests outside the local application.');

@@ -61,7 +61,8 @@ export function makeWorkbook(sheets, { compressed = true, sharedStrings = false 
     ['xl/workbook.xml', `<workbook xmlns="${ns}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets>${sheets.map((sheet, index) => `<sheet name="${xmlText(sheet.name)}" sheetId="${index + 1}" r:id="r${index + 1}"${sheet.hidden ? ' state="hidden"' : ''}/>`).join('')}</sheets></workbook>`],
     ['xl/_rels/workbook.xml.rels', `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${sheets.map((_, index) => `<Relationship Id="r${index + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet${index + 1}.xml"/>`).join('')}${sharedStrings ? '<Relationship Id="strings" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>' : ''}</Relationships>`]
   ];
-  for (const [index, sheet] of sheets.entries()) entries.push([`xl/worksheets/sheet${index + 1}.xml`, `<worksheet xmlns="${ns}"><sheetData>${sheet.rows.map((values, row) => `<row r="${row + 1}">${values.map((input, col) => {
+  for (const [index, sheet] of sheets.entries()) {
+    let worksheet = `<worksheet xmlns="${ns}"><sheetData>${sheet.rows.map((values, row) => `<row r="${row + 1}">${values.map((input, col) => {
     if (input === undefined || input === null) return '';
     let value = typeof input === 'object' ? input : { value: String(input), type: 'inlineStr' };
     if (sharedStrings && value.type === 'inlineStr') {
@@ -69,7 +70,10 @@ export function makeWorkbook(sheets, { compressed = true, sharedStrings = false 
       value = { type: 's', value: String(sharedIndex.get(value.value)) };
     }
     return `<c r="${column(col)}${row + 1}" t="${value.type || 'n'}">${value.formula !== undefined ? `<f>${xmlText(value.formula)}</f>` : ''}${value.type === 'inlineStr' ? `<is><t>${xmlText(value.value)}</t></is>` : `<v>${xmlText(value.value)}</v>`}</c>`;
-  }).join('')}</row>`).join('')}</sheetData></worksheet>`]);
+    }).join('')}</row>`).join('')}</sheetData></worksheet>`;
+    if (sheet.transformXml) worksheet = sheet.transformXml(worksheet);
+    entries.push([`xl/worksheets/sheet${index + 1}.xml`, worksheet]);
+  }
   if (sharedStrings) entries.push(['xl/sharedStrings.xml', `<sst xmlns="${ns}">${shared.map(value => `<si><t>${xmlText(value)}</t></si>`).join('')}</sst>`]);
   return makeZip(entries, compressed);
 }
