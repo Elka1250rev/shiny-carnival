@@ -4,3 +4,8 @@
 /* Keep the import action within the scrollable dialog on small screens. */
 #import-dialog{overflow-anchor:none}
 #import-dialog>.modal-actions{position:sticky;bottom:0;z-index:2;background:var(--paper);padding-bottom:8px;box-shadow:0 -8px 12px var(--paper)}
+#import-dialog>.import-actions{flex-wrap:wrap;gap:10px 12px}
+.import-action-feedback{flex-basis:100%;min-width:0;text-align:left}
+#import-action-status{margin:0;font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+#import-show-issues{margin-top:4px;min-height:36px;text-decoration:underline}
+#import-dialog [tabindex="-1"]:focus{outline:2px solid #88b675;outline-offset:3px}

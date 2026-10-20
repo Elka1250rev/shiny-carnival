@@ -11,6 +11,7 @@ import { verifyOpeningXlsx } from '../tests/browser/opening-xlsx.mjs';
 import { verifyImportValidation } from '../tests/browser/import-validation.mjs';
 import { verifyThirdAssetFee } from '../tests/browser/third-asset-fee.mjs';
 import { verifyXlsxTypes } from '../tests/browser/xlsx-types.mjs';
+import { verifyImportAction } from '../tests/browser/import-action.mjs';
 
 // These fixtures are synthetic. No financial data or external service is used.
 const project = fileURLToPath(new URL('../', import.meta.url));
@@ -145,7 +146,10 @@ async function recordImportClickTarget(page, source) {
 async function activateButton(page, button, label = 'button') {
   const touch = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
   if (!touch) { await button.click(); return; }
-  await button.scrollIntoViewIfNeeded();
+  // Center the control so the sticky import footer cannot cover an element that
+  // merely intersects the viewport. This only scrolls; hit and trusted-event
+  // assertions below still have to succeed before and after the native tap.
+  await button.evaluate(element => element.scrollIntoView({ block: 'center', inline: 'nearest' }));
   // Debounced validation can insert an error summary above the editor. Wait for
   // the measured control and visual viewport to settle before choosing tap coordinates.
   // Do not retry a misplaced tap: the trusted-event assertions below still apply.
@@ -449,8 +453,20 @@ async function openExchangeReview(page, rows) {
   await page.locator('#import-button').click();
   await page.locator('#import-file').setInputFiles({ name: 'synthetic-platform.csv', mimeType: 'text/csv', buffer: Buffer.from(sourceCsv(rows)) });
   await page.locator('#exchange-review').waitFor({ state: 'visible' });
-  assert.equal(await page.locator('#exchange-review .exchange-review-table tbody tr').count(), rows.length,
-    'The source preview must show every source row, including informational deposits and rewards.');
+  assert.equal(await page.locator('#exchange-review .exchange-review-table tbody tr').count(), Math.min(rows.length, 50),
+    'The source preview must show the first page without dropping informational deposits or rewards.');
+}
+async function confirmExchangeBasics(page, review) {
+  await page.waitForFunction(() => {
+    const text = document.querySelector('#exchange-review .exchange-review-errors')?.textContent || '';
+    return text.includes('(dateConfirmed)') && !text.includes('(mode)');
+  });
+  await activateButton(page, review.getByLabel(/^Confermo data e ora come riportate nel CSV/), 'exchange-date-confirmation');
+  await page.waitForFunction(() => {
+    const text = document.querySelector('#exchange-review .exchange-review-errors')?.textContent || '';
+    return text.includes('(grossValuesConfirmed)') && !text.includes('(dateConfirmed)');
+  });
+  await activateButton(page, review.getByLabel(/^Confermo le quantità nette effettive del CSV/), 'exchange-value-confirmation');
 }
 async function assertReviewBlocked(page, description) {
   const button = page.locator('#confirm-import');
@@ -483,8 +499,7 @@ async function verifyExchangeImport(page, label) {
   await openExchangeReview(page, exchangeSource);
   const review = page.locator('#exchange-review');
   await review.getByLabel('Come inserire le operazioni', { exact: true }).selectOption('replace');
-  await review.getByLabel(/^Confermo data e ora come riportate nel CSV/).check();
-  await review.getByLabel(/^Confermo le quantità nette effettive del CSV/).check();
+  await confirmExchangeBasics(page, review);
   await review.getByLabel(/ALFA → BETA/).selectOption('neutral');
   await review.getByLabel('Data dei lotti ricevuti nelle permute neutrali', { exact: true }).selectOption('historical');
   await review.getByLabel('Natura documentata dei premi', { exact: true }).selectOption('per_row');
@@ -580,8 +595,7 @@ async function configureOpeningRecovery(page) {
   await openExchangeReview(page, openingRecoverySource);
   const review = page.locator('#exchange-review');
   await review.getByLabel('Come inserire le operazioni', { exact: true }).selectOption('replace');
-  await review.getByLabel(/^Confermo data e ora come riportate nel CSV/).check();
-  await review.getByLabel(/^Confermo le quantità nette effettive del CSV/).check();
+  await confirmExchangeBasics(page, review);
   await review.getByLabel('Natura documentata dei premi', { exact: true }).selectOption('per_row');
   await review.getByLabel('Costo fiscale documentato dei token ricevuti, per le vendite future', { exact: true }).selectOption('manual');
   await activateButton(page, review.locator('[data-source-line="3"]'), 'opening-recovery');
@@ -869,6 +883,8 @@ try {
     await verifyThirdAssetFee({ page: await newPage(options, 'third-asset-fee-' + label), label, activateButton, importDataset,
       downloadSession, openExchangeReview, exchangeSourceRow, results });
     await verifyXlsxTypes({ page: await newPage(options, 'xlsx-types-' + label), label, results });
+    await verifyImportAction({ page: await newPage(options, 'import-action-' + label), label, activateButton,
+      openExchangeReview, exchangeSourceRow, downloadSession, results, artifacts });
   }
   assert.deepEqual(errors, [], 'The browser must not report JavaScript errors.');
   assert.deepEqual(externalRequests, [], 'PDF export must not send requests outside the local application.');
