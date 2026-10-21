@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Decimal } from '../dist/decimal.js';
 import { calculate } from '../dist/engine.js';
 import { buildPdfReport, buildPdfReportData } from '../dist/pdf-report.js';
 
@@ -91,7 +92,7 @@ test('sub-cent results keep their exact gain or loss classification and totals',
   assert.match(gain, /Plusvalenza inferiore a 0,005 €/);
   assert.match(loss, /Minusvalenza inferiore a 0,005 €/);
   assert.doesNotMatch(gain + loss, /Pareggio/);
-  assert.match(html, /totali fiscali sono calcolati con la precisione del motore/);
+  assert.match(html, /totali fiscali e i costi complessivi sono calcolati con la precisione del motore/);
 });
 
 test('gains and losses smaller than eighteen decimal places retain their exact classification', () => {
@@ -200,10 +201,10 @@ test('the plain report model and HTML share exact formatted values without a DOM
   const result = calculate(input, 2025);
   const data = buildPdfReportData(result, input.openingDate);
   const html = buildPdfReport(result, input.openingDate);
-  assert.deepEqual(Object.keys(data), [
-    'title', 'header', 'summaryTitle', 'scope', 'summary', 'warnings', 'columns',
-    'rows', 'notes', 'lossSections', 'recoveryNote', 'disclaimer', 'emptyNote'
-  ]);
+  assert.deepEqual(Object.keys(data).sort(), [
+    'title', 'header', 'opening', 'summaryTitle', 'scope', 'summary', 'warnings', 'columns',
+    'rows', 'operationLots', 'notes', 'lossSections', 'recoveryNote', 'disclaimer', 'emptyNote'
+  ].sort());
   assert.equal(data.columns.length, 8);
   assert.deepEqual(data.rows[0], [
     '01/02/2025\nSequenza 1', 'BTC', 'Vendita', '0,000000000000000001', '0,00 €',
@@ -222,7 +223,14 @@ test('the plain report model and HTML share exact formatted values without a DOM
     if (value && typeof value === 'object') Object.values(value).forEach(onlyStringLeaves);
     else assert.equal(typeof value, 'string');
   };
-  onlyStringLeaves(data);
+  const { operationLots, ...plainFields } = data;
+  onlyStringLeaves(plainFields);
+  assert.equal(operationLots.length, data.rows.length);
+  operationLots.forEach((details, index) => {
+    if (index === 0) assert.notEqual(details, null, 'The sale must have a lot breakdown.');
+    else assert.equal(details, null, 'An acquisition has no consumed lots.');
+    if (details !== null) onlyStringLeaves(details);
+  });
   assert.deepEqual(JSON.parse(JSON.stringify(data)), data);
 });
 
@@ -477,4 +485,176 @@ test('documented promotional acquisitions identify the confirmed cost without ce
   assert.equal(result.tax.income, '0');
   assert.equal(result.rows[0].type, 'acquisto');
   assert.match(data.notes.join(' '), /non certifica l’esenzione del premio/);
+});
+
+const assertEuro = (text, expected) => {
+  assert.match(text, /€/, 'A displayed euro amount must be labelled.');
+  const value = text.replace(/\s/g, '').replace(/€/g, '').replace(/\./g, '').replace(',', '.').replace('−', '-');
+  assert.equal(Decimal.from(value).cmp(expected), 0, `${text} must represent ${expected} EUR`);
+};
+
+test('the opening section aggregates original asset costs and preserves fully consumed historical lots', () => {
+  const input = dataset({
+    initialLots: [
+      lot('old-btc', { quantity: '2', unitCost: '10' }),
+      lot('new-btc', { acquiredOn: '2024-02-01', order: 2, unitCost: '40' }),
+      lot('eth-opening', { asset: 'ETH', quantity: '2', unitCost: '3' })
+    ],
+    transactions: [sell('complete-btc-sale', { quantity: '3', unitPrice: '30' })]
+  });
+  const result = calculate(input, 2025);
+  const snapshot = structuredClone(result);
+  assert.equal(result.holdings.find(holding => holding.asset === 'BTC').quantity, '0');
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.match(data.opening.title, /Situazione iniziale.*01\/01\/2025/);
+  assert.equal(data.opening.columns.length, 4);
+  assert.deepEqual(data.opening.rows.map(row => row[0]), ['BTC', 'ETH']);
+  const btc = data.opening.rows[0];
+  assert.equal(btc[1], '3');
+  assertEuro(btc[2], '20');
+  assertEuro(btc[3], '60');
+  assert.match(data.opening.note, /ponderat|medio/i, 'The asset price must be labelled as an average, not a unique LIFO lot price.');
+  assert.equal(data.opening.lotColumns.length, 5);
+  assert.equal(data.opening.lotRows.length, 3);
+  const old = data.opening.lotRows.find(row => row[1].includes('old-btc'));
+  const recent = data.opening.lotRows.find(row => row[1].includes('new-btc'));
+  assert.equal(old[0], 'BTC'); assert.equal(old[2], '2');
+  assert.match(old[1], /01\/01\/2024/);
+  assertEuro(old[3], '10'); assertEuro(old[4], '20');
+  assert.equal(recent[2], '1'); assert.match(recent[1], /01\/02\/2024/);
+  assertEuro(recent[3], '40'); assertEuro(recent[4], '40');
+  const html = buildPdfReport(result, input.openingDate);
+  assert.ok(html.includes('class="pdf-opening-row"'));
+  assert.ok(html.indexOf(data.opening.title) < html.indexOf(data.summaryTitle), 'Opening inventory must precede the tax summary.');
+  assert.equal(operationRows(html).length, 1, 'Opening rows must never be counted as operations.');
+  data.opening.rows[0][1] = '999';
+  data.opening.lotRows[0][3] = '999 €';
+  data.operationLots[0].rows[0][2] = '999 €';
+  assert.deepEqual(result, snapshot, 'Rendering and modifying the report copy cannot alter calculated opening or consumed lots.');
+});
+
+test('each sale explains every consumed LIFO lot, its unit price and the fiscal-result reconciliation', () => {
+  const input = dataset({
+    initialLots: [lot('opening', { quantity: '2', unitCost: '10' })],
+    transactions: [
+      buy('recent-purchase', { quantity: '2', unitPrice: '30', fees: '2' }),
+      sell('multi-lot-sale', { date: '2025-02-02', quantity: '3', unitPrice: '50', fees: '3' })
+    ]
+  });
+  const result = calculate(input, 2025);
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.equal(data.operationLots.length, data.rows.length);
+  assert.equal(data.operationLots[0], null, 'Purchases must not acquire a fictitious lot-consumption table.');
+  const details = data.operationLots[1];
+  assert.match(details.title, /Lotti ceduti in LIFO.*02\/02\/2025.*sequenza 1.*BTC.*multi-lot-sale/);
+  assert.equal(details.columns.length, 4);
+  assert.equal(details.rows.length, 2);
+  assert.match(details.rows[0][0], /recent-purchase.*01\/02\/2025/s);
+  assert.equal(details.rows[0][1], '2');
+  assertEuro(details.rows[0][2], '30'); assertEuro(details.rows[0][3], '60');
+  assert.match(details.rows[1][0], /opening.*01\/01\/2024/s);
+  assert.equal(details.rows[1][1], '1');
+  assertEuro(details.rows[1][2], '10'); assertEuro(details.rows[1][3], '10');
+  assert.match(details.total, /Costo fiscale attribuito.*70,00 €/);
+  assert.match(details.verification, /150,00 €.*70,00 €.*80,00 €/);
+  assert.doesNotMatch(details.verification, /85,50/, 'Reconciliation must use LIFO fiscal cost, not the management average.');
+  const html = buildPdfReport(result, input.openingDate);
+  assert.ok(html.includes('class="pdf-lot-details"'));
+  assert.ok(html.includes(details.title));
+  assert.ok(html.includes(details.verification));
+  assert.equal(operationRows(html).length, 2);
+});
+
+test('the opening average and individual disposal prices retain eighteen decimal places', () => {
+  const input = dataset({ initialLots: [
+    lot('precise-old', { quantity: '2', unitCost: '10.000000000000000001' }),
+    lot('precise-new', { acquiredOn: '2024-02-01', order: 2, unitCost: '20.000000000000000002' })
+  ], transactions: [sell('precise-sale', { quantity: '1.5', unitPrice: '50' })] });
+  const data = buildPdfReportData(calculate(input, 2025), input.openingDate);
+  // (2 × 10.000000000000000001 + 20.000000000000000002) / 3,
+  // rounded only for this unit-price display at the eighteenth decimal place.
+  assertEuro(data.opening.rows[0][2], '13.333333333333333335');
+  const details = data.operationLots[0];
+  assert.equal(details.rows[0][1], '1');
+  assertEuro(details.rows[0][2], '20.000000000000000002');
+  assert.equal(details.rows[1][1], '0,5');
+  assertEuro(details.rows[1][2], '10.000000000000000001');
+  assert.match(data.notes.join(' '), /costi unitari.*18 decimali.*approssimat/i);
+});
+
+test('estimated costs and unknown historical dates remain explicit after a neutral exchange', () => {
+  const input = dataset({ version: 2,
+    initialLots: [lot('estimated-opening', { acquiredOn: '', quantity: '3', unitCost: '9', basisMethod: 'estimated_average' })],
+    transactions: [
+      buy('neutral-transfer', { type: 'permuta_neutrale', quantity: '3', unitPrice: '0', receivedAsset: 'ETH', receivedQuantity: '9', lotDatePolicy: 'historical' }),
+      sell('eth-sale', { date: '2025-02-02', asset: 'ETH', quantity: '3', unitPrice: '10' })
+    ]
+  });
+  const data = buildPdfReportData(calculate(input, 2025), input.openingDate);
+  const initial = data.opening.lotRows[0];
+  assert.match(initial[1], /stimat/i);
+  assert.match(initial[1], /data.*non disponibile/i);
+  assertEuro(initial[3], '9');
+  const sale = data.operationLots[1];
+  assert.equal(sale.rows.length, 1);
+  assert.match(sale.rows[0][0], /stimat/i);
+  assert.match(sale.rows[0][0], /data.*non disponibile/i);
+  assert.match(sale.rows[0][0], /neutral-transfer/);
+  assert.match(sale.rows[0][0], /estimated-opening/);
+  assertEuro(sale.rows[0][2], '3');
+  assertEuro(sale.rows[0][3], '9');
+  assert.match(sale.verification, /30,00 €.*9,00 €.*21,00 €/);
+});
+
+test('lot costs use exact display rounding and a sub-precision positive unit cost never appears free', () => {
+  const fractional = dataset({ version: 2, transactions: [
+    buy('fractional', { quantity: '3', unitPrice: '0', totalEur: '300.014999999999999999' }),
+    sell('sell-fraction', { order: 2, unitPrice: '100' })
+  ] });
+  const rounded = buildPdfReportData(calculate(fractional, 2025), fractional.openingDate);
+  assertEuro(rounded.operationLots[1].rows[0][3], '100');
+  assert.match(rounded.operationLots[1].total, /100,00 €/);
+  assert.match(rounded.operationLots[1].verification, /100,00 €.*100,00 €/);
+  const tiny = dataset({ version: 2, transactions: [
+    buy('tiny-unit-cost', { quantity: '1000000000000000000', unitPrice: '0', totalEur: '0.000000000000000001' }),
+    sell('sell-tiny', { order: 2, quantity: '1000000000000000000', unitPrice: '0', totalEur: '1' }),
+    buy('free', { order: 3, asset: 'ETH', unitPrice: '0' }),
+    sell('sell-free', { order: 4, asset: 'ETH', unitPrice: '1' })
+  ] });
+  const details = buildPdfReportData(calculate(tiny, 2025), tiny.openingDate);
+  assert.match(details.operationLots[1].rows[0][2], /inferiore|</i);
+  assert.match(details.operationLots[1].rows[0][2], /0,000000000000000001/);
+  assertEuro(details.operationLots[3].rows[0][2], '0');
+  assert.doesNotMatch(details.operationLots[3].rows[0][2], /inferiore|</i);
+});
+
+test('an empty opening is labelled explicitly and is not confused with missing or closing balances', () => {
+  const input = dataset({ transactions: [buy('new-purchase')] });
+  const result = calculate(input, 2025);
+  assert.equal(result.holdings[0].quantity, '1');
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.deepEqual(data.opening.rows, []);
+  assert.deepEqual(data.opening.lotRows, []);
+  assert.match(data.opening.emptyNote, /nessun|non .*inizial/i);
+  const html = buildPdfReport(result, input.openingDate);
+  assert.ok(html.includes(data.opening.emptyNote));
+  assert.equal(operationRows(html).length, 1);
+});
+
+test('opening and transferred-lot identifiers remain untrusted text in the HTML report', () => {
+  const initialId = 'opening <svg onload="bad()"> &';
+  const transferId = 'transfer <img src=x onerror="bad()"> &';
+  const input = dataset({ version: 2, initialLots: [lot(initialId)], transactions: [
+    buy(transferId, { type: 'permuta_neutrale', unitPrice: '0', receivedAsset: 'ETH', receivedQuantity: '2', lotDatePolicy: 'historical' }),
+    sell('final-sale', { order: 2, asset: 'ETH', quantity: '2', unitPrice: '60' })
+  ] });
+  const result = calculate(input, 2025);
+  const data = buildPdfReportData(result, input.openingDate);
+  assert.ok(data.opening.lotRows.flat().some(value => value.includes(initialId)));
+  assert.ok(data.operationLots[1].rows.flat().some(value => value.includes(transferId)));
+  assert.ok(data.operationLots[1].rows.flat().some(value => value.includes(initialId)));
+  const html = buildPdfReport(result, input.openingDate);
+  assert.match(html, /opening &lt;svg onload=&quot;bad\(\)&quot;&gt; &amp;/);
+  assert.match(html, /transfer &lt;img src=x onerror=&quot;bad\(\)&quot;&gt; &amp;/);
+  assert.doesNotMatch(html, /<svg|<img|<script/i);
 });

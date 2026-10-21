@@ -12,6 +12,7 @@ import { verifyImportValidation } from '../tests/browser/import-validation.mjs';
 import { verifyThirdAssetFee } from '../tests/browser/third-asset-fee.mjs';
 import { verifyXlsxTypes } from '../tests/browser/xlsx-types.mjs';
 import { verifyImportAction } from '../tests/browser/import-action.mjs';
+import { verifyPdfLots } from '../tests/browser/pdf-lots.mjs';
 
 // These fixtures are synthetic. No financial data or external service is used.
 const project = fileURLToPath(new URL('../', import.meta.url));
@@ -876,6 +877,7 @@ try {
   await verifyOpeningLotRecovery(await newPage({ viewport: { width: 1280, height: 900 } }, 'opening-recovery-desktop'), 'desktop');
   await verifyOpeningLotRecovery(await newPage(devices['Pixel 7'], 'opening-recovery-mobile'), 'mobile');
   for (const [label, options] of [['desktop', { viewport: { width: 1280, height: 900 } }], ['mobile', devices['Pixel 7']]]) {
+    await verifyPdfLots({ page: await newPage(options, 'pdf-lots-' + label), label, importDataset, exportPdf });
     await verifyOpeningXlsx({ page: await newPage(options, 'opening-xlsx-' + label), label, artifacts, activateButton, importDataset,
       downloadSession, openExchangeReview, exchangeSourceRow, results });
     await verifyImportValidation({ page: await newPage(options, 'import-validation-' + label), label, activateButton, importDataset,

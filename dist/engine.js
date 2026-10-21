@@ -252,14 +252,15 @@ export function calculate(data, selectedYear = typeof data?.openingDate === 'str
     if (!portfolios.has(asset)) portfolios.set(asset, { asset, quantity: ZERO, cost: ZERO, fiscalCost: ZERO, lots: [] });
     return portfolios.get(asset);
   };
-  const addLot = (holding, { id, acquiredOn, order, quantity, fiscalCost, managementCost, initial = false, provenance }) => {
+  const addLot = (holding, { id, acquiredOn, order, quantity, fiscalCost, managementCost, initial = false, provenance, basisMethod }) => {
     holding.quantity = holding.quantity.add(quantity);
     holding.cost = holding.cost.add(managementCost);
     holding.fiscalCost = holding.fiscalCost.add(fiscalCost);
     // A separate unique sequence also distinguishes the portions of a single
     // neutral exchange without altering the public transaction order.
     holding.lots.push({ id, acquiredOn, order, quantity, unitCost: fiscalCost.div(quantity),
-      initial, lotSequence: lotSequence++, provenance });
+      initial, lotSequence: lotSequence++, provenance,
+      ...(basisMethod === 'estimated_average' ? { basisMethod } : {}) });
   };
   const consumeLots = (holding, quantity) => {
     const managementCost = average(holding.cost, holding.quantity).mul(quantity);
@@ -290,7 +291,7 @@ export function calculate(data, selectedYear = typeof data?.openingDate === 'str
     const quantity = Decimal.from(initial.quantity);
     const cost = quantity.mul(initial.unitCost);
     addLot(getHolding(initial.asset), { id: initial.id, acquiredOn: initial.acquiredOn, order: initial.order,
-      quantity, fiscalCost: cost, managementCost: cost, initial: true });
+      quantity, fiscalCost: cost, managementCost: cost, initial: true, basisMethod: initial.basisMethod });
   }
   const calculatedRows = [];
   for (const transaction of [...data.transactions].sort(chronological)) {
@@ -335,6 +336,8 @@ export function calculate(data, selectedYear = typeof data?.openingDate === 'str
       managementCostBasis = consumed.managementCost;
       lotDetails = consumed.pieces.map(piece => ({ lotId: piece.id, acquiredOn: piece.acquiredOn, order: piece.order,
         lotSequence: piece.lotSequence, quantity: piece.quantity.toString(), unitCost: piece.unitCost.toString(), cost: piece.cost.toString(),
+        display: { unitCost: piece.unitCost.toFixed(18), unitCostSign: piece.unitCost.cmp(ZERO), cost: piece.cost.toFixed(2) },
+        ...(piece.basisMethod === 'estimated_average' ? { basisMethod: piece.basisMethod } : {}),
         ...(piece.provenance ? { provenance: structuredClone(piece.provenance) } : {}) }));
       if (transaction.type === 'permuta_neutrale') {
         fiscalKind = 'neutral';
@@ -346,6 +349,7 @@ export function calculate(data, selectedYear = typeof data?.openingDate === 'str
           const historical = transaction.lotDatePolicy === 'historical';
           addLot(target, { id: transaction.id, acquiredOn: historical ? piece.acquiredOn : transaction.date,
             order: historical ? piece.order : transaction.order, initial: historical && piece.initial,
+            basisMethod: piece.basisMethod,
             quantity: receivedQuantity.mul(portion), fiscalCost: piece.cost, managementCost: managementCostBasis.mul(portion),
             provenance: { lotId: piece.id, acquiredOn: piece.acquiredOn, order: piece.order,
               asset: transaction.asset, originLotId: piece.provenance?.originLotId ?? piece.id,
@@ -405,5 +409,5 @@ export function calculate(data, selectedYear = typeof data?.openingDate === 'str
   if (data.initialLots.some(lot => lot.basisMethod === 'estimated_average')) warnings.push('Sono presenti saldi iniziali a prezzo medio storico stimato, con date di acquisto non disponibili. I risultati e l’imposta sono indicativi: i singoli lotti LIFO iniziali non sono ricostruiti. Puoi correggere i costi nella Situazione iniziale.');
   if (!data.openingDate.endsWith('-01-01')) warnings.push('Il riepilogo annuale comprende solo le operazioni dalla data di apertura: per l’imposta annuale occorre includere tutte le operazioni dell’anno.');
   if (tax.expiredLosses.length) warnings.push('Le minusvalenze pregresse scadute sono escluse dalla compensazione.');
-  return { rows, holdings, tax, warnings };
+  return { initialLots: structuredClone(data.initialLots), rows, holdings, tax, warnings };
 }

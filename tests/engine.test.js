@@ -632,3 +632,85 @@ test('calculated rows preserve explicit totals, documented reward basis and lot-
     assert.equal(Object.hasOwn(result.rows[0], 'rewardCostEur'), false);
   }
 });
+
+test('calculation preserves an independent opening snapshot even after lots are fully sold', () => {
+  const input = dataset({
+    initialLots: [lot('sold-opening', { quantity: '2', unitCost: '12.000000000000000001' }),
+      lot('untouched-opening', { asset: 'ETH', quantity: '3', unitCost: '4' })],
+    transactions: [sell('liquidate', { quantity: '2', unitPrice: '20' })]
+  });
+  const original = structuredClone(input);
+  const result = calculate(input, 2025);
+  assert.deepEqual(input, original);
+  assert.deepEqual(result.initialLots, original.initialLots);
+  assert.equal(result.holdings.find(holding => holding.asset === 'BTC').quantity, '0');
+  result.initialLots[0].unitCost = '999';
+  assert.equal(input.initialLots[0].unitCost, '12.000000000000000001');
+  input.initialLots[1].quantity = '8';
+  assert.equal(result.initialLots[1].quantity, '3');
+});
+
+test('estimated opening basis stays identifiable in multi-lot LIFO sales and repeated neutral transfers', () => {
+  for (const lotDatePolicy of ['historical', 'exchange']) {
+    const input = v2({
+      initialLots: [lot('estimated-opening', { acquiredOn: '', quantity: '2', unitCost: '10', basisMethod: 'estimated_average' })],
+      transactions: [
+        buy('documented-purchase', { quantity: '2', unitPrice: '30' }),
+        neutral('first-transfer', { date: '2025-02-02', quantity: '3', receivedQuantity: '9', lotDatePolicy }),
+        neutral('second-transfer', { date: '2025-02-03', asset: 'ETH', quantity: '9', receivedAsset: 'SOL', receivedQuantity: '18', lotDatePolicy }),
+        sell('final-sale', { date: '2025-02-04', asset: 'SOL', quantity: '18', unitPrice: '10' })
+      ]
+    });
+    const result = calculate(input, 2025);
+    const first = result.rows[1];
+    assert.deepEqual(first.lotDetails.map(piece => [piece.lotId, piece.quantity, piece.cost]),
+      [['documented-purchase', '2', '60'], ['estimated-opening', '1', '10']]);
+    assert.equal(Object.hasOwn(first.lotDetails[0], 'basisMethod'), false);
+    assert.equal(first.lotDetails[1].basisMethod, 'estimated_average');
+    for (const row of result.rows.slice(2)) {
+      assert.equal(row.costBasis, '70');
+      const estimated = row.lotDetails.find(piece => piece.basisMethod === 'estimated_average');
+      const documented = row.lotDetails.find(piece => !Object.hasOwn(piece, 'basisMethod'));
+      assert.ok(estimated, lotDatePolicy + ': estimated basis must survive every transfer');
+      assert.ok(documented, lotDatePolicy + ': documented basis must not acquire an estimate label');
+      assert.equal(estimated.provenance.originLotId, 'estimated-opening');
+      assert.equal(estimated.provenance.originAcquiredOn, '');
+      assert.equal(estimated.cost, '10');
+      assert.equal(estimated.display.cost, '10.00');
+      assert.equal(documented.cost, '60');
+    }
+    assert.equal(result.rows[3].fiscalResult, '110');
+    assert.deepEqual(result.initialLots, input.initialLots);
+  }
+});
+
+test('consumed-lot display costs round exact fractional costs once at the half-cent boundary', () => {
+  for (const [totalEur, expected] of [['300.014999999999999999', '100.00'], ['300.015', '100.01']]) {
+    const result = calculate(v2({ transactions: [
+      buy('fractional-purchase', { quantity: '3', unitPrice: '0', totalEur }),
+      sell('partial-sale', { order: 2, unitPrice: '100' })
+    ] }), 2025);
+    const piece = result.rows[1].lotDetails[0];
+    // Both values serialize to 100.005 at 18 decimal places, but their exact
+    // rationals lie on opposite sides of the rounding boundary.
+    assert.equal(piece.cost, '100.005');
+    assert.deepEqual(piece.display, { unitCost: '100.005000000000000000', unitCostSign: 1, cost: expected });
+    assert.equal(piece.display.cost, result.rows[1].display.costBasis);
+  }
+});
+
+test('consumed-lot display distinguishes a tiny positive unit cost from a documented zero cost', () => {
+  const result = calculate(v2({ transactions: [
+    buy('tiny-unit-cost', { quantity: '1000000000000000000', unitPrice: '0', totalEur: '0.000000000000000001' }),
+    sell('sell-tiny-cost', { order: 2, quantity: '1000000000000000000', unitPrice: '0', totalEur: '1' }),
+    buy('zero-unit-cost', { order: 3, asset: 'ETH', unitPrice: '0' }),
+    sell('sell-zero-cost', { order: 4, asset: 'ETH', unitPrice: '1' })
+  ] }), 2025);
+  const tiny = result.rows[1].lotDetails[0];
+  const zero = result.rows[3].lotDetails[0];
+  assert.equal(tiny.unitCost, '0');
+  assert.equal(tiny.cost, '0.000000000000000001');
+  assert.deepEqual(tiny.display, { unitCost: '0.000000000000000000', unitCostSign: 1, cost: '0.00' });
+  assert.equal(zero.unitCost, '0');
+  assert.deepEqual(zero.display, { unitCost: '0.000000000000000000', unitCostSign: 0, cost: '0.00' });
+});
