@@ -19,6 +19,16 @@ L'applicazione è statica: i dati inseriti rimangono nella memoria della pagina.
 
 Il **prezzo medio ponderato gestionale** e il **costo fiscale LIFO** sono due valori distinti. Una vendita lascia invariato il prezzo medio gestionale finché rimangono unità; il calcolo fiscale consuma invece i lotti più recenti. Le commissioni incidono sul conto gestionale e non sono dedotte nel risultato fiscale, secondo la circolare AdE 30/E § 3.1. I lotti iniziali devono contenere costi fiscali documentati esclusi gli oneri; i vecchi file con commissioni incorporate richiedono una correzione manuale. Il dettaglio delle regole e dei limiti è in [docs/FISCALITA.md](docs/FISCALITA.md).
 
+## Consultare i risultati
+
+L'anno d'imposta selezionato determina il riepilogo fiscale e il filtro iniziale dell'elenco delle operazioni. **Mostra tutti gli anni** permette di consultare la cronologia completa; la ricerca per crypto si combina con questa scelta. Le operazioni sono presentate in pagine da 25 movimenti e un cambio di anno o ricerca riporta alla prima pagina. Filtri e paginazione agiscono solo sulla visualizzazione: saldi prima e dopo, costi e risultati sono sempre ricostruiti dall'intera cronologia.
+
+Su cellulare, fino a 760 px, le tabelle sono sostituite da schede con etichette leggibili e comandi touch. Per ogni operazione rimangono visibili quantità e prezzi medi gestionali prima e dopo; nelle permute sono riportate entrambe le crypto. Vendite e permute imponibili mostrano **corrispettivo lordo − costo fiscale di carico LIFO = plusvalenza o minusvalenza**. Il pulsante **Dettaglio** apre i singoli lotti consumati, i relativi costi e gli eventuali dati originali importati. Le tabelle restano disponibili su desktop.
+
+Il riepilogo annuale precede l'elenco. **Come si arriva all’imposta** distingue plusvalenze, proventi da detenzione (anche quando sono zero), minusvalenze dell'anno, pregresse compensate e imponibile. La sezione **Crypto possedute**, in precedenza chiamata Posizioni, mostra invece quantità e costi residui dopo **tutte** le operazioni, anche successive all'anno d'imposta selezionato: non è una valutazione a prezzi di mercato.
+
+**Salva sessione CSV** conserva il file ricaricabile con tutti i dati della sessione. **Scarica riepilogo PDF** e **Scarica prospetto CSV** producono report di tutte le operazioni, indipendentemente dai filtri e dalla pagina corrente; soltanto il riepilogo fiscale del PDF riguarda l'anno selezionato. I report non possono ripristinare la sessione.
+
 ## Avvio locale
 
 Serve Node.js 24. Non sono necessarie dipendenze da installare.
@@ -44,11 +54,11 @@ Usare un branch dedicato per ogni modifica e aprire una pull request verso `main
 
 ## Dati ed esportazione
 
-L'esportazione dei dati salva la configurazione, i lotti iniziali, le transazioni e le minusvalenze pregresse; in versione 2 conserva anche i metadati originali dell'exchange e le scelte esplicite di conversione. Importando quel file si ricostruiscono i risultati con le regole dell'applicazione. Il CSV del prospetto è invece destinato alla consultazione e non è un file ricaricabile.
+Il pulsante **Salva sessione CSV** salva la configurazione, i lotti iniziali, le transazioni e le minusvalenze pregresse; in versione 2 conserva anche i metadati originali dell'exchange e le scelte esplicite di conversione. Importando quel file si ricostruiscono i risultati con le regole dell'applicazione. Il CSV del prospetto è invece destinato alla consultazione e non è un file ricaricabile.
 
-Nella sezione **Operazioni**, il pulsante **Esporta PDF** crea e scarica direttamente un file PDF, senza aprire la stampa del browser. Su Android con Chrome il file viene gestito come un normale download. Se il download automatico non parte, toccare il collegamento **Scarica il PDF** che compare sotto il pulsante. Alcuni browser possono aprire un'anteprima in una nuova scheda, dalla quale salvare o condividere il file: la pagina della sessione rimane aperta.
+Nella sezione **Operazioni**, il pulsante **Scarica riepilogo PDF** crea e scarica direttamente un file PDF, senza aprire la stampa del browser. Su Android con Chrome il file viene gestito come un normale download. Se il download automatico non parte, toccare il collegamento **Scarica il PDF** che compare sotto il pulsante. Alcuni browser possono aprire un'anteprima in una nuova scheda, dalla quale salvare o condividere il file: la pagina della sessione rimane aperta.
 
-Il prospetto è in A4 orizzontale e contiene tutte le operazioni della sessione, anche con un filtro di ricerca attivo. Per ciascuna riga mostra quantità, commissioni, corrispettivo lordo fiscale, costo di acquisto o costo fiscale LIFO e risultato. Distingue acquisti senza realizzo, permute neutrali, permute imponibili, proventi da detenzione e depositi EUR informativi. Il riepilogo fiscale riguarda soltanto l'anno selezionato e conserva le avvertenze del calcolo.
+Il prospetto è in A4 orizzontale e contiene tutte le operazioni della sessione, di tutti gli anni e di tutte le crypto, indipendentemente da anno visualizzato, filtro di ricerca o pagina corrente. Per ciascuna riga mostra quantità, commissioni, corrispettivo lordo fiscale, costo di acquisto o costo fiscale LIFO e risultato. Distingue acquisti senza realizzo, permute neutrali, permute imponibili, proventi da detenzione e depositi EUR informativi. Il riepilogo fiscale riguarda soltanto l'anno selezionato e conserva le avvertenze del calcolo.
 
 La situazione iniziale comincia nella prima pagina: riepilogo per asset con quantità, prezzo medio ponderato di carico e costo fiscale totale, seguito dai singoli lotti con identificativo, data, quantità e costo unitario. Sono i saldi originali all'apertura, anche quando le operazioni successive li hanno esauriti. Sotto ogni vendita e permuta compare il dettaglio dei lotti ceduti in LIFO, con la quantità effettivamente consumata di ciascun lotto, costo unitario e costo attribuito. Per le cessioni imponibili è riportata anche la verifica **corrispettivo lordo − costo fiscale = risultato fiscale**; nelle permute neutrali viene indicato il costo trasferito. I costi medi stimati e le date originarie non disponibili sono segnalati esplicitamente.
 
@@ -58,7 +68,7 @@ Gli importi del PDF sono arrotondati direttamente dai valori esatti del calcolo.
 
 Il PDF è creato nella memoria del browser con una copia locale di **pdf-lib 1.17.1**, caricata solo alla prima esportazione. Non vengono usati CDN o servizi di conversione e nessuna transazione viene inviata in rete. Versione, licenza MIT e checksum sono documentati in [dist/vendor/README.md](dist/vendor/README.md). Il testo e gli importi sono vettoriali; i nomi Unicode non supportati dal font PDF sono disegnati con i font del dispositivo e accompagnati dal testo originale tramite `/ActualText`.
 
-Il collegamento conserva in memoria il PDF appena generato per consentire un secondo download. Cambiare anno, modificare/importare i dati o svuotare la sessione rimuove il collegamento al vecchio report. Il PDF serve alla consultazione: per riprendere il lavoro usare il CSV ottenuto con **Esporta dati**.
+Il collegamento conserva in memoria il PDF appena generato per consentire un secondo download. Cambiare anno, modificare/importare i dati o svuotare la sessione rimuove il collegamento al vecchio report. Il PDF serve alla consultazione: per riprendere il lavoro usare il CSV ottenuto con **Salva sessione CSV**.
 
 Il formato usa UTF-8, separatore `;`, date `AAAA-MM-GG` e punto decimale senza separatori delle migliaia. La specifica ricaricabile è in [docs/CSV.md](docs/CSV.md); il caricamento exchange, le conferme richieste e la conservazione delle colonne sono descritti in [docs/CSV-EXCHANGE.md](docs/CSV-EXCHANGE.md); [examples/esempio.csv](examples/esempio.csv) contiene un portafoglio minimo da importare.
 

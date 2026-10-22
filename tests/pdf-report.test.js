@@ -278,7 +278,7 @@ test('an empty session produces a zero summary and explains the CSV needed to re
   assert.match(html, /Operazioni: 0\./);
   assert.match(html, /<dt>Imposta sostitutiva stimata<\/dt><dd>0,00 €<\/dd>/);
   assert.match(html, /non può essere importato per riprendere la sessione/);
-  assert.match(html, /Esporta dati/);
+  assert.match(html, /Salva sessione CSV/);
   assert.match(html, /Restano ferme le responsabilità che non possono essere escluse per legge/);
 });
 

@@ -9,13 +9,14 @@ import { createExchangeReview } from './exchange-review.js';
 import { createOpeningImport } from './opening-review.js';
 import { buildPdfReportData } from './pdf-report.js';
 import { createPdfDownload } from './pdf-download.js';
+import { escapeHtml, money, unitMoney, lotUnitMoney, quantity, dateLabel, signedMoney, numericClass, assetCell, operationLabel, fiscalLabel, actionButtons, rowAmount, fiscalResultText, selectLedgerRecords, renderLedgerCards, renderConsumedLots } from './ledger-view.js';
 
 const $ = id => document.getElementById(id);
-const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]));
 const freshDataset = () => ({ version: 1, openingDate: '2025-01-01', initialLots: [], transactions: [], carryLosses: [] });
 let dataset = freshDataset();
 let selectedYear = 2026;
 let view = 'transactions';
+let ledgerPage = 1;
 let editing = null;
 const importSession = createImportSession((content, name) => {
   const firstLine = String(content).replace(/^\uFEFF/, '').match(/[^\r\n]+/)?.[0] || '';
@@ -82,26 +83,11 @@ window.addEventListener('pagehide', () => pdfDownload.reset());
 
 const labels = {
   transactions: { title: 'Le tue operazioni', breadcrumb: 'Operazioni', eyebrow: 'IL DIARIO DEL PORTAFOGLIO', button: 'Nuova operazione', emptyTitle: 'Ogni conto parte da un movimento.', emptyText: 'Inserisci i lotti iniziali, oppure aggiungi il tuo primo acquisto. Il resto lo calcoliamo insieme.', emptyButton: 'Inserisci la situazione iniziale', footnote: 'Operazioni di tutti gli anni, ordinate per data e sequenza.' },
-  holdings: { title: 'Le tue posizioni', breadcrumb: 'Posizioni', eyebrow: 'LA COMPOSIZIONE DEL PORTAFOGLIO', button: 'Nuova operazione', emptyTitle: 'Il tuo portafoglio è ancora da comporre.', emptyText: 'Aggiungi un lotto iniziale o un acquisto per vedere le quantità e i costi residui.', emptyButton: 'Aggiungi un acquisto', footnote: 'Quantità e costi dopo tutte le operazioni, anche oltre l’anno selezionato.' },
+  holdings: { title: 'Le crypto possedute', breadcrumb: 'Crypto possedute', eyebrow: 'LA COMPOSIZIONE DEL PORTAFOGLIO', button: 'Nuova operazione', emptyTitle: 'Il tuo portafoglio è ancora da comporre.', emptyText: 'Aggiungi un lotto iniziale o un acquisto per vedere le quantità e i costi residui.', emptyButton: 'Aggiungi un acquisto', footnote: 'Quantità e costi dopo tutte le operazioni, anche oltre l’anno selezionato.' },
   lots: { title: 'La situazione iniziale', breadcrumb: 'Situazione iniziale', eyebrow: 'IL PUNTO DI PARTENZA', button: 'Aggiungi un lotto', emptyTitle: 'Partiamo da ciò che possiedi.', emptyText: 'Per ogni lotto residuo inserisci quantità, costo unitario e data originaria di acquisto.', emptyButton: 'Aggiungi un lotto iniziale', footnote: 'Una riga per ciascun lotto residuo alla data iniziale.' },
   losses: { title: 'Le minusvalenze pregresse', breadcrumb: 'Minusvalenze pregresse', eyebrow: 'I RESIDUI GIÀ DICHIARATI', button: 'Aggiungi un residuo', emptyTitle: 'Hai minusvalenze da riportare?', emptyText: 'Inserisci solo i residui crypto già dichiarati e disponibili all’apertura, con l’anno di origine.', emptyButton: 'Aggiungi una minusvalenza', footnote: 'Residui disponibili all’apertura; utilizzabili entro il quarto anno successivo.' }
 };
 
-function formatDecimal(value, places = 2, trim = false) {
-  if (value === null || value === undefined) return '—';
-  const rounded = Decimal.from(value).toFixed(places);
-  let [integer, fraction] = rounded.split('.');
-  const negative = integer.startsWith('-');
-  if (negative) integer = integer.slice(1);
-  integer = integer.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
-  if (trim && fraction) fraction = fraction.replace(/0+$/, '');
-  return (negative ? '−' : '') + integer + (fraction ? ',' + fraction : '');
-}
-const money = value => value === null || value === undefined ? '—' : formatDecimal(value) + ' €';
-const quantity = value => formatDecimal(value, 18, true);
-const dateLabel = value => value ? String(value).split('-').reverse().join('/') : 'Data non disponibile';
-const signedMoney = value => value === null || value === undefined ? '—' : (Decimal.from(value).cmp('0') > 0 ? '+' : '') + money(value);
-const numericClass = value => value && Decimal.from(value).cmp('0') < 0 ? 'negative' : value && Decimal.from(value).cmp('0') > 0 ? 'positive' : '';
 const id = prefix => prefix + '-' + crypto.randomUUID();
 const rowCount = () => dataset.initialLots.length + dataset.transactions.length + dataset.carryLosses.length;
 const errorText = error => error.errors ? error.errors.map(entry => (entry.line ? 'Riga CSV ' + entry.line : friendlyLocation(entry.location || 'Dati')) + ': ' + entry.message).slice(0, 5).join('\n') : error.message;
@@ -132,28 +118,15 @@ function commit(next, message) {
   dataset = next;
   selectedYear = nextYear;
   result = computed;
+  ledgerPage = 1;
   render();
   if (message) notify(message);
 }
-function assetCell(asset) {
-  const normalized = asset.toLowerCase();
-  const icon = normalized === 'btc' || normalized === 'bitcoin' ? '₿' : normalized === 'eth' || normalized === 'ethereum' ? '♦' : asset.slice(0, 1);
-  const kind = icon === '₿' ? 'btc' : icon === '♦' ? 'eth' : '';
-  return `<div class="asset-cell"><span class="coin-avatar ${kind}" aria-hidden="true">${escapeHtml(icon)}</span><span class="asset-name">${escapeHtml(asset)}</span></div>`;
-}
-const typeLabel = type => ({ acquisto: 'Acquisto', vendita: 'Vendita', permuta_neutrale: 'Permuta neutrale', permuta_imponibile: 'Permuta imponibile', provento: 'Provento da detenzione', deposito_eur: 'Deposito EUR' })[type] || type;
-const documentedPrize = row => row.source?.decisions?.rewardTreatment === 'documented_acquisition' && !row.source.derived;
-const operationLabel = row => documentedPrize(row) ? 'Premio · costo documentato' : typeLabel(row.type);
-const fiscalLabel = row => documentedPrize(row) ? 'Altri obblighi fiscali da verificare' : row.fiscalKind === 'neutral' ? 'Costo storico trasferito' : row.fiscalKind === 'income' ? 'Imponibile alla percezione' : row.fiscalKind === 'fiat' ? 'Movimento informativo' : row.fiscalKind === 'capital_gain' ? 'Costo LIFO ' + money(row.costBasis) : 'Nessun realizzo';
 function transactionRow(row) {
   const fiat = row.fiscalKind === 'fiat';
-  const balance = (before) => fiat ? '—' : quantity(row[before ? 'beforeQuantity' : 'afterQuantity']) + `<span class="subvalue">PM ${Decimal.from(row[before ? 'beforeQuantity' : 'afterQuantity']).cmp('0') ? money(row[before ? 'beforeAverage' : 'afterAverage']) : '—'}</span>` + (row.receivedAsset ? `<span class="subvalue">${escapeHtml(row.receivedAsset)}: ${quantity(row[before ? 'receivedBeforeQuantity' : 'receivedAfterQuantity'])} · PM ${Decimal.from(row[before ? 'receivedBeforeQuantity' : 'receivedAfterQuantity']).cmp('0') ? money(row[before ? 'receivedBeforeAverage' : 'receivedAfterAverage']) : '—'}</span>` : '');
-  const movement = `${quantity(row.quantity)} ${escapeHtml(row.asset)}` + (row.receivedAsset ? ` → ${quantity(row.receivedQuantity)} ${escapeHtml(row.receivedAsset)}` : row.totalEur !== undefined ? ` · ${money(row.totalEur)}` : ` × ${money(row.unitPrice)}`);
-  return `<tr><td>${dateLabel(row.date)}<span class="subvalue">Sequenza ${row.order}</span></td><td>${assetCell(row.asset)}${row.receivedAsset ? `<span class="subvalue">→ ${escapeHtml(row.receivedAsset)}</span>` : ''}</td><td><span class="operation-tag ${row.fiscalKind === 'capital_gain' ? 'sell' : ''}">${escapeHtml(operationLabel(row))}</span><span class="subvalue">${movement}</span></td><td class="numeric">${balance(true)}</td><td class="numeric">${balance(false)}</td><td class="numeric ${numericClass(row.fiscalResult)}">${signedMoney(row.fiscalResult)}<span class="subvalue">${fiscalLabel(row)}</span></td><td>${actionButtons(row.id, 'transactions', true, Boolean(row.source || row.totalEur !== undefined || !['acquisto', 'vendita'].includes(row.type)))}</td></tr>`;
-}
-function actionButtons(recordId, kind, details = false, readOnly = false) {
-  const safeId = escapeHtml(recordId);
-  return `<div class="row-actions">${details ? `<button data-detail="${safeId}" title="Dettaglio del calcolo" aria-label="Dettaglio del calcolo">↗</button>` : ''}${readOnly ? '' : `<button data-edit="${safeId}" data-kind="${kind}" title="Modifica" aria-label="Modifica">✎</button>`}<button data-delete="${safeId}" data-kind="${kind}" title="Elimina" aria-label="Elimina">×</button></div>`;
+  const balance = (before) => fiat ? '—' : quantity(row[before ? 'beforeQuantity' : 'afterQuantity']) + `<span class="subvalue">Prezzo medio gestionale ${Decimal.from(row[before ? 'beforeQuantity' : 'afterQuantity']).cmp('0') ? unitMoney(row[before ? 'beforeAverage' : 'afterAverage']) : '—'}</span>` + (row.receivedAsset ? `<span class="subvalue">${escapeHtml(row.receivedAsset)}: ${quantity(row[before ? 'receivedBeforeQuantity' : 'receivedAfterQuantity'])} · Prezzo medio gestionale ${Decimal.from(row[before ? 'receivedBeforeQuantity' : 'receivedAfterQuantity']).cmp('0') ? unitMoney(row[before ? 'receivedBeforeAverage' : 'receivedAfterAverage']) : '—'}</span>` : '');
+  const movement = `${quantity(row.quantity)} ${escapeHtml(row.asset)}` + (row.receivedAsset ? ` → ${quantity(row.receivedQuantity)} ${escapeHtml(row.receivedAsset)}` : row.totalEur !== undefined ? ` · ${money(row.totalEur)}` : ` × ${unitMoney(row.unitPrice)}`);
+  return `<tr data-record-id="${escapeHtml(row.id)}"><td>${dateLabel(row.date)}<span class="subvalue">Sequenza ${row.order}</span></td><td>${assetCell(row.asset)}${row.receivedAsset ? `<span class="subvalue">→ ${escapeHtml(row.receivedAsset)}</span>` : ''}</td><td><span class="operation-tag ${row.fiscalKind === 'capital_gain' ? 'sell' : ''}">${escapeHtml(operationLabel(row))}</span><span class="subvalue">${movement}</span></td><td class="numeric">${balance(true)}</td><td class="numeric">${balance(false)}</td><td class="numeric ${numericClass(row.fiscalResult)}">${escapeHtml(fiscalResultText(row))}<span class="subvalue">${escapeHtml(fiscalLabel(row))}</span></td><td>${actionButtons(row.id, 'transactions', true, Boolean(row.source || row.totalEur !== undefined || !['acquisto', 'vendita'].includes(row.type)))}</td></tr>`;
 }
 function emptyState(filtered = false) {
   const copy = labels[view];
@@ -161,34 +134,39 @@ function emptyState(filtered = false) {
 }
 function render() {
   const tax = result.tax;
+  const displayed = key => tax.display?.[key] ?? tax[key];
   $('tax-year').value = String(selectedYear);
   $('tax-year').querySelector('option[value="2025"]').disabled = dataset.openingDate >= '2026-01-01';
-  $('metric-net').textContent = money(tax.net);
+  $('metric-net').textContent = money(displayed('net'));
   $('metric-net').className = numericClass(tax.net);
-  $('metric-taxable').textContent = money(tax.taxable);
+  $('metric-taxable').textContent = money(displayed('taxable'));
   $('metric-tax').textContent = money(tax.tax);
   $('metric-rate').textContent = tax.rate + '%';
   $('metric-tax-caption').textContent = 'Imposta sostitutiva · anno ' + selectedYear;
   $('metric-cost').textContent = money(result.holdings.reduce((total, holding) => total.add(holding.fiscalCost), Decimal.from('0')));
   $('summary-year').textContent = selectedYear;
-  $('summary-gains').textContent = money(tax.gains);
-  $('summary-gains-label').textContent = Decimal.from(tax.income || '0').cmp('0') ? 'Plusvalenze e proventi' : 'Plusvalenze realizzate';
-  $('metric-net-caption').textContent = Decimal.from(tax.income || '0').cmp('0') ? 'Plusvalenze e proventi meno minusvalenze' : 'Plusvalenze meno minusvalenze';
-  $('summary-income').textContent = Decimal.from(tax.income || '0').cmp('0') ? 'Di cui proventi da detenzione: ' + money(tax.income) : '';
-  $('summary-losses').textContent = '− ' + money(tax.losses);
-  $('summary-used').textContent = '− ' + money(tax.lossesUsed);
-  $('summary-taxable').textContent = money(tax.taxable);
+  $('summary-gains').textContent = money(displayed('capitalGains'));
+  $('summary-gains-label').textContent = 'Plusvalenze realizzate';
+  $('metric-net-caption').textContent = 'Plusvalenze + proventi − minusvalenze dell’anno';
+  $('summary-income').textContent = money(displayed('income'));
+  $('summary-losses').textContent = '− ' + money(displayed('losses'));
+  $('summary-net').textContent = money(displayed('net'));
+  $('summary-used').textContent = '− ' + money(displayed('lossesUsed'));
+  $('summary-taxable').textContent = money(displayed('taxable'));
   $('summary-tax').textContent = money(tax.tax);
   $('summary-rate').textContent = 'Aliquota ordinaria del ' + tax.rate + '%';
   $('opening-date-label').textContent = dateLabel(dataset.openingDate);
-  const carry = tax.remainingLosses.map(loss => `<div><strong>${money(loss.amount)}</strong> da ${loss.originYear} · scadenza ${loss.expiresYear}</div>`).join('');
-  const expired = tax.expiredLosses.map(loss => `<div>Residuo ${loss.originYear} scaduto: ${money(loss.amount)}</div>`).join('');
+  const carry = tax.remainingLosses.map(loss => `<div><strong>${money(loss.displayAmount ?? loss.amount)}</strong> da ${loss.originYear} · scadenza ${loss.expiresYear}</div>`).join('');
+  const expired = tax.expiredLosses.map(loss => `<div>Residuo ${loss.originYear} scaduto: ${money(loss.displayAmount ?? loss.amount)}</div>`).join('');
   $('carry-summary').innerHTML = carry || expired ? `<div>Minusvalenze residue / scadute</div>${carry}${expired}` : '';
+  $('annual-warnings').hidden = !result.warnings.length;
+  $('annual-warnings').innerHTML = result.warnings.map(escapeHtml).join('<br>');
   renderLedger();
 }
 function renderLedger() {
   const copy = labels[view];
   $('breadcrumb-view').textContent = copy.breadcrumb;
+  $('mobile-current-view').textContent = copy.breadcrumb;
   $('view-eyebrow').textContent = copy.eyebrow;
   $('view-title').firstChild.textContent = copy.title + ' ';
   $('add-button').innerHTML = '<span aria-hidden="true">+</span> ' + copy.button;
@@ -196,28 +174,46 @@ function renderLedger() {
   $('asset-filter').disabled = view === 'losses';
   $('report-button').hidden = view !== 'transactions';
   $('pdf-button').hidden = view !== 'transactions';
+  $('report-help').hidden = view !== 'transactions';
   $('opening-import-button').hidden = view !== 'lots';
+  $('ledger-year-filter').hidden = view !== 'transactions';
+  $('holding-cost-summary').hidden = view !== 'holdings';
   document.querySelectorAll('[data-view]').forEach(button => {
     button.classList.toggle('active', button.dataset.view === view);
     if (button.dataset.view === view) button.setAttribute('aria-current', 'page');
     else button.removeAttribute('aria-current');
   });
   const filter = $('asset-filter').value.trim().toUpperCase();
-  const source = view === 'transactions' ? result.rows : view === 'holdings' ? result.holdings : view === 'lots' ? dataset.initialLots : dataset.carryLosses;
-  const records = view === 'losses' ? source : source.filter(record => !filter || record.asset.includes(filter) || record.receivedAsset?.includes(filter));
-  $('record-count').textContent = source.length;
+  const showAllYears = $('show-all-years').checked;
+  if (view === 'transactions') $('ledger-footnote').textContent = `Operazioni ${showAllYears ? 'di tutti gli anni' : 'del ' + selectedYear}, ordinate per data e sequenza.`;
+  const selection = selectLedgerRecords(view, result, dataset, { year: selectedYear, showAllYears, assetFilter: filter, page: ledgerPage });
+  const { records, pageRows, sourceCount, yearCount, totalPages, from, to } = selection;
+  ledgerPage = selection.page;
+  $('record-count').textContent = records.length;
+  $('ledger-filter-info').textContent = view === 'transactions'
+    ? `${records.length} operazioni ${showAllYears ? 'di tutti gli anni' : 'nel ' + selectedYear}${filter ? ' · crypto: ' + filter : ''} · ${sourceCount} nella sessione. I saldi seguono l’intera cronologia.`
+    : view === 'holdings' ? 'Quantità e costi dopo tutte le operazioni inserite, anche oltre l’anno selezionato. Non sono valori di mercato.'
+    : view === 'lots' ? 'Disponibilità alla data iniziale del ' + dateLabel(dataset.openingDate) + '. Ogni riga rappresenta un lotto.'
+    : 'Minusvalenze crypto già dichiarate, disponibili alla data iniziale.';
+  $('ledger-pagination').hidden = view !== 'transactions' || !records.length;
+  $('ledger-prev').disabled = ledgerPage <= 1;
+  $('ledger-next').disabled = ledgerPage >= totalPages;
+  $('ledger-page-info').textContent = `Operazioni ${from}–${to} di ${records.length} · pagina ${ledgerPage} di ${totalPages}`;
   let html = '';
-  if (!records.length) html = emptyState(Boolean(source.length && filter));
-  else if (view === 'transactions') {
-    html = `<div class="table-scroll"><table><thead><tr><th>DATA / ORDINE</th><th>CRYPTO</th><th>OPERAZIONE</th><th class="numeric">PRIMA</th><th class="numeric">DOPO</th><th class="numeric">RISULTATO FISCALE</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${records.map(transactionRow).join('')}</tbody></table></div>`;
+  if (!records.length) {
+    if (view === 'transactions' && sourceCount && !showAllYears && !yearCount) {
+      html = `<div class="empty-state"><h3>Nessuna operazione nel ${selectedYear}.</h3><p>La sessione contiene operazioni di altri anni. Puoi mostrarle senza cambiare il riepilogo fiscale.</p><button class="button button-outline" data-show-all-years>Mostra tutti gli anni</button></div>`;
+    } else html = emptyState(Boolean(sourceCount && filter));
+  } else if (view === 'transactions') {
+    html = `<div class="table-scroll ledger-table"><table><thead><tr><th>DATA / ORDINE</th><th>CRYPTO</th><th>OPERAZIONE</th><th class="numeric">PRIMA</th><th class="numeric">DOPO</th><th class="numeric">RISULTATO FISCALE</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${pageRows.map(transactionRow).join('')}</tbody></table></div>`;
   } else if (view === 'holdings') {
-    html = `<div class="table-scroll"><table><thead><tr><th>CRYPTO</th><th class="numeric">QUANTITÀ RESIDUA</th><th class="numeric">PREZZO MEDIO GESTIONALE</th><th class="numeric">COSTO FISCALE RESIDUO</th></tr></thead><tbody>${records.map(holding => `<tr><td>${assetCell(holding.asset)}</td><td class="numeric">${quantity(holding.quantity)}</td><td class="numeric">${Decimal.from(holding.quantity).cmp('0') ? money(holding.average) : '—'}<span class="subvalue">Costo gestionale ${money(holding.cost)}</span></td><td class="numeric">${money(holding.fiscalCost)}<span class="subvalue">Media lotti ${Decimal.from(holding.quantity).cmp('0') ? money(holding.fiscalAverage) : '—'}</span></td></tr>`).join('')}</tbody></table></div>`;
+    html = `<div class="table-scroll ledger-table"><table><thead><tr><th>CRYPTO</th><th class="numeric">QUANTITÀ RESIDUA</th><th class="numeric">PREZZO MEDIO GESTIONALE</th><th class="numeric">COSTO FISCALE RESIDUO</th></tr></thead><tbody>${pageRows.map(holding => `<tr data-record-id="${escapeHtml(holding.asset)}"><td>${assetCell(holding.asset)}</td><td class="numeric">${quantity(holding.quantity)}</td><td class="numeric">${Decimal.from(holding.quantity).cmp('0') ? unitMoney(holding.average) : '—'}<span class="subvalue">Costo gestionale ${money(holding.cost)}</span></td><td class="numeric">${money(holding.fiscalCost)}<span class="subvalue">Media lotti ${Decimal.from(holding.quantity).cmp('0') ? unitMoney(holding.fiscalAverage) : '—'}</span></td></tr>`).join('')}</tbody></table></div>`;
   } else if (view === 'lots') {
-    html = `<div class="table-scroll"><table><thead><tr><th>ACQUISTO ORIGINARIO</th><th>CRYPTO</th><th class="numeric">QUANTITÀ</th><th class="numeric">COSTO UNITARIO</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${records.map(lot => `<tr><td>${dateLabel(lot.acquiredOn)}${lot.basisMethod ? '<span class="subvalue">Prezzo medio storico stimato</span>' : ''}<span class="subvalue">Sequenza ${lot.order}</span></td><td>${assetCell(lot.asset)}</td><td class="numeric">${quantity(lot.quantity)}</td><td class="numeric">${money(lot.unitCost)}<span class="subvalue">Totale ${money(Decimal.from(lot.quantity).mul(lot.unitCost))}</span></td><td>${actionButtons(lot.id, 'initialLots')}</td></tr>`).join('')}</tbody></table></div>`;
+    html = `<div class="table-scroll ledger-table"><table><thead><tr><th>ACQUISTO ORIGINARIO</th><th>CRYPTO</th><th class="numeric">QUANTITÀ</th><th class="numeric">COSTO UNITARIO</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${pageRows.map(lot => `<tr data-record-id="${escapeHtml(lot.id)}"><td>${dateLabel(lot.acquiredOn)}${lot.basisMethod ? '<span class="subvalue">Prezzo medio storico stimato</span>' : ''}<span class="subvalue">Sequenza ${lot.order}</span></td><td>${assetCell(lot.asset)}</td><td class="numeric">${quantity(lot.quantity)}</td><td class="numeric">${unitMoney(lot.unitCost)}<span class="subvalue">Totale ${money(Decimal.from(lot.quantity).mul(lot.unitCost))}</span></td><td>${actionButtons(lot.id, 'initialLots')}</td></tr>`).join('')}</tbody></table></div>`;
   } else {
-    html = `<div class="table-scroll"><table><thead><tr><th>ANNO DI ORIGINE</th><th class="numeric">RESIDUO ALL’APERTURA</th><th>UTILIZZABILE FINO AL</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${records.map(loss => `<tr><td>${loss.year}</td><td class="numeric">${money(loss.amount)}</td><td>${loss.year + 4}</td><td>${actionButtons(loss.id, 'carryLosses')}</td></tr>`).join('')}</tbody></table></div>`;
+    html = `<div class="table-scroll ledger-table"><table><thead><tr><th>ANNO DI ORIGINE</th><th class="numeric">RESIDUO ALL’APERTURA</th><th>UTILIZZABILE FINO AL</th><th><span class="sr-only">Azioni</span></th></tr></thead><tbody>${pageRows.map(loss => `<tr data-record-id="${escapeHtml(loss.id)}"><td>${loss.year}</td><td class="numeric">${money(loss.amount)}</td><td>${loss.year + 4}</td><td>${actionButtons(loss.id, 'carryLosses')}</td></tr>`).join('')}</tbody></table></div>`;
   }
-  if (result.warnings.length) html += `<div class="warning-block">${result.warnings.map(escapeHtml).join('<br>')}</div>`;
+  if (records.length) html += renderLedgerCards(view, pageRows);
   $('ledger-content').innerHTML = html;
 }
 function field(name, label, value = '', options = {}) {
@@ -330,14 +326,14 @@ function showDetails(recordId) {
   $('detail-title').textContent = operationLabel(row) + ' ' + row.asset + (row.receivedAsset ? ' → ' + row.receivedAsset : '');
   const pair = (label, value) => `<div class="detail-pair"><span>${label}</span><strong>${escapeHtml(value)}</strong></div>`;
   const balances = (before) => pair('Quantità ' + row.asset, quantity(row[before ? 'beforeQuantity' : 'afterQuantity']))
-    + pair('Prezzo medio gestionale', money(row[before ? 'beforeAverage' : 'afterAverage']))
-    + pair('Costo medio dei lotti fiscali', money(row[before ? 'fiscalBeforeAverage' : 'fiscalAfterAverage']))
-    + (row.receivedAsset ? pair('Quantità ' + row.receivedAsset, quantity(row[before ? 'receivedBeforeQuantity' : 'receivedAfterQuantity'])) + pair('Prezzo medio gestionale ' + row.receivedAsset, money(row[before ? 'receivedBeforeAverage' : 'receivedAfterAverage'])) : '');
+    + pair('Prezzo medio gestionale', unitMoney(row[before ? 'beforeAverage' : 'afterAverage']))
+    + pair('Costo medio dei lotti fiscali', unitMoney(row[before ? 'fiscalBeforeAverage' : 'fiscalAfterAverage']))
+    + (row.receivedAsset ? pair('Quantità ' + row.receivedAsset, quantity(row[before ? 'receivedBeforeQuantity' : 'receivedAfterQuantity'])) + pair('Prezzo medio gestionale ' + row.receivedAsset, unitMoney(row[before ? 'receivedBeforeAverage' : 'receivedAfterAverage'])) : '');
   const source = row.source?.values;
   const sourceHtml = source ? `<details><summary>Dati originali del CSV e scelte confermate</summary><p class="small-note">Per rettificare, ricarica il CSV della piattaforma. Gli importi originali sono conservati separatamente dai valori fiscali applicati.</p>${Object.entries(source).map(([key, value]) => pair(escapeHtml(key), value || '—')).join('')}${Object.entries(row.source.decisions || {}).map(([key, value]) => pair(escapeHtml(key), String(value))).join('')}</details>` : '';
   const realized = row.fiscalKind === 'capital_gain';
   const fiscalCostLabel = row.fiscalKind === 'neutral' ? 'Costo storico trasferito' : row.fiscalKind === 'income' ? 'Costo documentato dei token ricevuti' : 'Costo fiscale (commissioni escluse)';
-  $('detail-content').innerHTML = `<p class="modal-description">${dateLabel(row.date)} · sequenza ${row.order} · ${quantity(row.quantity)} ${escapeHtml(row.asset)}${row.receivedAsset ? ` → ${quantity(row.receivedQuantity)} ${escapeHtml(row.receivedAsset)}` : ''}</p>${row.fiscalKind === 'fiat' ? '<p>Deposito EUR informativo: non modifica le posizioni crypto né il risultato fiscale.</p>' : `<div class="detail-grid"><section class="detail-block"><h3>Prima dell’operazione</h3>${balances(true)}</section><section class="detail-block"><h3>Dopo l’operazione</h3>${balances(false)}</section></div>`}<div class="detail-result">${row.totalEur !== undefined ? pair('Controvalore fiscale totale', money(row.totalEur)) : ''}${realized ? pair('Corrispettivo fiscale lordo', money(row.proceeds)) : ''}${pair(fiscalCostLabel, money(row.fiscalKind === 'income' ? row.rewardCostEur : row.costBasis))}${pair('Commissioni aggiuntive gestionali in euro', money(row.fees))}${realized ? pair('Risultato gestionale (prezzo medio)', signedMoney(row.managementResult)) : ''}${pair('Risultato fiscale', signedMoney(row.fiscalResult) + ' · ' + fiscalLabel(row))}${row.lotDatePolicy ? pair('Data dei lotti ricevuti', row.lotDatePolicy === 'historical' ? 'Storica dei lotti ceduti' : 'Data dello scambio') : ''}</div>${row.lotDetails.length ? `<h3 class="detail-table-caption">Lotti attribuiti all’operazione, dal più recente</h3><div class="table-scroll"><table class="detail-table"><thead><tr><th>ACQUISTO</th><th class="numeric">QUANTITÀ</th><th class="numeric">COSTO UNITARIO</th><th class="numeric">COSTO ATTRIBUITO</th></tr></thead><tbody>${row.lotDetails.map(lot => `<tr><td>${dateLabel(lot.acquiredOn)}${lot.basisMethod ? '<span class="subvalue">Prezzo medio storico stimato</span>' : ''}<span class="subvalue">Sequenza ${lot.order}</span></td><td class="numeric">${quantity(lot.quantity)}</td><td class="numeric">${money(lot.unitCost)}</td><td class="numeric">${money(lot.cost)}</td></tr>`).join('')}</tbody></table></div>` : ''}${sourceHtml}<p class="small-note">Le commissioni non sono dedotte fiscalmente. I valori a video sono arrotondati per la lettura; l’imposta finale è arrotondata ai centesimi.</p>`;
+  $('detail-content').innerHTML = `<p class="modal-description">${dateLabel(row.date)} · sequenza ${row.order} · ${quantity(row.quantity)} ${escapeHtml(row.asset)}${row.receivedAsset ? ` → ${quantity(row.receivedQuantity)} ${escapeHtml(row.receivedAsset)}` : ''}</p>${row.fiscalKind === 'fiat' ? '<p>Deposito EUR informativo: non modifica le posizioni crypto né il risultato fiscale.</p>' : `<div class="detail-grid"><section class="detail-block"><h3>Prima dell’operazione</h3>${balances(true)}</section><section class="detail-block"><h3>Dopo l’operazione</h3>${balances(false)}</section></div>`}<div class="detail-result">${row.totalEur !== undefined ? pair('Controvalore fiscale totale', money(row.totalEur)) : ''}${realized ? pair('Corrispettivo fiscale lordo', money(rowAmount(row, 'proceeds'))) : ''}${pair(fiscalCostLabel, money(row.fiscalKind === 'income' ? row.rewardCostEur : rowAmount(row, 'costBasis')))}${pair('Commissioni aggiuntive gestionali in euro', money(row.fees))}${realized ? pair('Risultato gestionale (prezzo medio)', signedMoney(row.managementResult)) : ''}${pair('Risultato fiscale', fiscalResultText(row) + ' · ' + fiscalLabel(row))}${row.lotDatePolicy ? pair('Data dei lotti ricevuti', row.lotDatePolicy === 'historical' ? 'Storica dei lotti ceduti' : 'Data dello scambio') : ''}</div>${row.lotDetails.length ? `<h3 class="detail-table-caption">Lotti attribuiti all’operazione, dal più recente</h3><div class="table-scroll ledger-table"><table class="detail-table"><thead><tr><th>ACQUISTO</th><th class="numeric">QUANTITÀ</th><th class="numeric">COSTO UNITARIO</th><th class="numeric">COSTO ATTRIBUITO</th></tr></thead><tbody>${row.lotDetails.map(lot => `<tr><td>${dateLabel(lot.acquiredOn)}${lot.basisMethod ? '<span class="subvalue">Prezzo medio storico stimato</span>' : ''}<span class="subvalue">Sequenza ${lot.order} · ${escapeHtml(lot.lotId)}</span></td><td class="numeric">${quantity(lot.quantity)}</td><td class="numeric">${escapeHtml(lotUnitMoney(lot))}</td><td class="numeric">${money(lot.display?.cost ?? lot.cost)}</td></tr>`).join('')}</tbody></table></div>${renderConsumedLots(row.lotDetails)}` : ''}${sourceHtml}<p class="small-note">Le commissioni non sono dedotte fiscalmente. I valori a video sono arrotondati per la lettura; l’imposta finale è arrotondata ai centesimi.</p>`;
   showDialog('detail-dialog');
 }
 function download(content, filename) {
@@ -365,7 +361,7 @@ function exampleDataset() {
   return { version: 1, openingDate: '2025-01-01', initialLots: [{ id: 'esempio-btc-iniziale', asset: 'BTC', acquiredOn: '2024-07-01', order: 1, quantity: '0.2', unitCost: '40000' }, { id: 'esempio-eth-iniziale', asset: 'ETH', acquiredOn: '2024-09-01', order: 2, quantity: '2', unitCost: '2400' }], transactions: [{ id: 'esempio-acquisto-btc', date: '2026-01-10', order: 1, type: 'acquisto', asset: 'BTC', quantity: '0.1', unitPrice: '50000', fees: '10' }, { id: 'esempio-vendita-eth', date: '2026-02-02', order: 2, type: 'vendita', asset: 'ETH', quantity: '0.5', unitPrice: '2100', fees: '5' }, { id: 'esempio-vendita-btc', date: '2026-02-10', order: 3, type: 'vendita', asset: 'BTC', quantity: '0.05', unitPrice: '60000', fees: '5' }, { id: 'esempio-acquisto-eth', date: '2026-03-20', order: 4, type: 'acquisto', asset: 'ETH', quantity: '0.4', unitPrice: '2200', fees: '3' }], carryLosses: [{ id: 'esempio-perdita-2024', year: 2024, amount: '100' }] };
 }
 function loadExample() {
-  const load = () => { selectedYear = 2026; $('asset-filter').value = ''; view = 'transactions'; commit(exampleDataset(), 'Esempio caricato. Puoi modificarlo, esportarlo o svuotare la sessione.'); };
+  const load = () => { selectedYear = 2026; $('asset-filter').value = ''; $('show-all-years').checked = false; view = 'transactions'; commit(exampleDataset(), 'Esempio caricato. Puoi modificarlo, esportarlo o svuotare la sessione.'); };
   if (rowCount()) confirm('Caricare l’esempio?', 'L’esempio sostituirà i dati della sessione. Esporta prima il CSV se vuoi conservarli.', load, 'Sostituisci con l’esempio');
   else load();
 }
@@ -447,11 +443,43 @@ async function readFile(file) {
   }
 }
 
-document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => { view = button.dataset.view; $('asset-filter').value = ''; renderLedger(); }));
+function setMobileMenu(open, restoreFocus = false) {
+  $('mobile-menu-toggle').setAttribute('aria-expanded', String(open));
+  $('portfolio-nav').classList.toggle('is-open', open);
+  if (restoreFocus) $('mobile-menu-toggle').focus();
+}
+function focusLedger() {
+  $('view-title').tabIndex = -1;
+  $('view-title').scrollIntoView({ block: 'start' });
+  $('view-title').focus({ preventScroll: true });
+}
+document.querySelectorAll('[data-view]').forEach(button => button.addEventListener('click', () => {
+  const menuWasOpen = $('mobile-menu-toggle').getAttribute('aria-expanded') === 'true';
+  view = button.dataset.view;
+  ledgerPage = 1;
+  $('asset-filter').value = '';
+  setMobileMenu(false);
+  renderLedger();
+  if (menuWasOpen) focusLedger();
+}));
+$('mobile-menu-toggle').addEventListener('click', () => setMobileMenu($('mobile-menu-toggle').getAttribute('aria-expanded') !== 'true'));
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !document.querySelector('dialog[open]') && $('mobile-menu-toggle').getAttribute('aria-expanded') === 'true') setMobileMenu(false, true);
+});
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => $(button.dataset.close).close()));
 ['open-rules', 'scope-rules'].forEach(name => $(name).addEventListener('click', () => showDialog('rules-dialog')));
-$('tax-year').addEventListener('change', () => { pdfDownload.reset(); selectedYear = Number($('tax-year').value); result = calculate(dataset, selectedYear); render(); });
-$('asset-filter').addEventListener('input', renderLedger);
+$('tax-year').addEventListener('change', () => {
+  pdfDownload.reset();
+  selectedYear = Number($('tax-year').value);
+  ledgerPage = 1;
+  $('show-all-years').checked = false;
+  result = calculate(dataset, selectedYear);
+  render();
+});
+$('asset-filter').addEventListener('input', () => { ledgerPage = 1; renderLedger(); });
+$('show-all-years').addEventListener('change', () => { ledgerPage = 1; renderLedger(); });
+$('ledger-prev').addEventListener('click', () => { ledgerPage -= 1; renderLedger(); focusLedger(); });
+$('ledger-next').addEventListener('click', () => { ledgerPage += 1; renderLedger(); focusLedger(); });
 $('add-button').addEventListener('click', () => openEntry(view === 'lots' ? 'initialLots' : view === 'losses' ? 'carryLosses' : 'transactions'));
 $('entry-form').addEventListener('submit', saveEntry);
 $('entry-dialog').addEventListener('close', () => {
@@ -462,10 +490,10 @@ $('entry-dialog').addEventListener('close', () => {
   reviewExchange();
 });
 $('config-button').addEventListener('click', () => openEntry('config'));
-$('clear-button').addEventListener('click', () => confirm('Svuotare la sessione?', 'Tutti i dati inseriti verranno rimossi dalla pagina. Per conservarli, esporta il CSV prima di procedere.', () => { selectedYear = 2026; view = 'transactions'; $('asset-filter').value = ''; commit(freshDataset(), 'Sessione svuotata.'); }, 'Svuota sessione'));
+$('clear-button').addEventListener('click', () => confirm('Svuotare la sessione?', 'Tutti i dati inseriti verranno rimossi dalla pagina. Per conservarli, esporta il CSV prima di procedere.', () => { selectedYear = 2026; view = 'transactions'; $('asset-filter').value = ''; $('show-all-years').checked = false; commit(freshDataset(), 'Sessione svuotata.'); }, 'Svuota sessione'));
 $('confirm-action').addEventListener('click', () => { $('confirm-dialog').close(); const action = confirmationAction; confirmationAction = null; action?.(); });
 ['export-button', 'privacy-export'].forEach(name => $(name).addEventListener('click', exportSession));
-$('report-button').addEventListener('click', () => { download(exportReportCsv(result.rows), 'criptoconti-prospetto-operazioni.csv'); notify('Prospetto di tutte le operazioni esportato. Per riprendere la sessione usa “Esporta dati”.'); });
+$('report-button').addEventListener('click', () => { download(exportReportCsv(result.rows), 'criptoconti-prospetto-operazioni.csv'); notify('Prospetto di tutte le operazioni esportato. Per riprendere la sessione usa “Salva sessione CSV”.'); });
 $('pdf-button').addEventListener('click', exportPdf);
 $('demo-button').addEventListener('click', loadExample);
 $('template-button').addEventListener('click', () => download(exportCsv(exampleDataset()), 'criptoconti-esempio.csv'));
@@ -487,6 +515,10 @@ $('confirm-import').addEventListener('click', () => {
     const next = pending.kind === 'exchange' ? reviewedDataset : pending.dataset;
     if (!next) return;
     commit(next, 'Sessione importata. Tutti i risultati sono stati ricalcolati.');
+    view = 'transactions';
+    $('asset-filter').value = '';
+    $('show-all-years').checked = false;
+    renderLedger();
     resetImport();
     $('import-dialog').close();
   } catch (error) {
@@ -503,7 +535,8 @@ $('ledger-content').addEventListener('click', event => {
   if (button.dataset.detail) showDetails(button.dataset.detail);
   else if (button.dataset.edit) openEntry(button.dataset.kind, button.dataset.edit);
   else if (button.dataset.delete) deleteRecord(button.dataset.kind, button.dataset.delete);
-  else if (button.hasAttribute('data-reset-search')) { $('asset-filter').value = ''; renderLedger(); }
+  else if (button.hasAttribute('data-reset-search')) { $('asset-filter').value = ''; ledgerPage = 1; renderLedger(); }
+  else if (button.hasAttribute('data-show-all-years')) { $('show-all-years').checked = true; ledgerPage = 1; renderLedger(); }
   else if (button.hasAttribute('data-empty-action')) openEntry(view === 'transactions' || view === 'lots' ? 'initialLots' : view === 'losses' ? 'carryLosses' : 'transactions');
 });
 window.addEventListener('beforeunload', event => { if (rowCount()) { event.preventDefault(); event.returnValue = ''; } });

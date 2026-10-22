@@ -156,8 +156,8 @@ export async function verifyOpeningXlsx({ page, label, artifacts, activateButton
   assert.ok(estimated.initialLots.every(lot => lot.basisMethod === 'estimated_average' && lot.acquiredOn === ''));
   assert.equal(estimated.initialLots.find(lot => lot.asset === 'ALFA').unitCost, '21');
   assert.match(await page.locator('#ledger-content').textContent(), /prezzo medio storico stimato|Prezzo medio storico stimato/);
-  assert.match(await page.locator('#ledger-content .warning-block').textContent(), /indicativi/);
-  const alfaRow = page.locator('#ledger-content tbody tr').filter({ hasText: 'ALFA' });
+  assert.match(await page.locator('#annual-warnings').textContent(), /indicativi/);
+  const alfaRow = page.locator('#ledger-content [data-record-id]:visible').filter({ hasText: 'ALFA' });
   await tap(alfaRow.getByRole('button', { name: 'Modifica', exact: true }));
   const entry = page.locator('#entry-dialog');
   assert.equal(await entry.getByLabel('Data originaria di acquisto', { exact: true }).inputValue(), '');

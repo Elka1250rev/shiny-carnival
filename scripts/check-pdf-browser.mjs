@@ -145,6 +145,11 @@ async function recordImportClickTarget(page, source) {
 // Native touch uses visual coordinates; DOM hit testing uses layout coordinates. Verify both
 // independently and assert the trusted touch and click reach the intended button.
 async function activateButton(page, button, label = 'button') {
+  const isNavigation = await button.evaluate(element => element.matches('#portfolio-nav > *'));
+  const menu = page.locator('#mobile-menu-toggle');
+  if (isNavigation && await menu.isVisible() && await menu.getAttribute('aria-expanded') === 'false') {
+    await activateButton(page, menu, label + ':open-menu');
+  }
   const touch = await page.evaluate(() => matchMedia('(pointer: coarse)').matches);
   if (!touch) { await button.click(); return; }
   // Center the control so the sticky import footer cannot cover an element that
@@ -192,7 +197,7 @@ async function activateButton(page, button, label = 'button') {
   assert.equal(target.error, undefined);
   assert.ok(Math.abs(target.scale - 1) < 0.000001, 'The mobile test requires an unzoomed visual viewport.');
   assert.ok(target.intersection.width > 0 && target.intersection.height > 0, 'The control must intersect the visual viewport.');
-  assert.equal(target.layoutHitMatches, true, 'The independent layout-coordinate hit test must target the intended control.');
+  assert.equal(target.layoutHitMatches, true, 'The independent layout-coordinate hit test must target the intended control: ' + JSON.stringify(target));
   assert.ok(target.tap.x >= 0 && target.tap.y >= 0 && target.tap.x < target.visual.width && target.tap.y < target.visual.height,
     'The native tap must fall inside the visual viewport.');
   await button.evaluate(button => {
@@ -246,9 +251,18 @@ async function importDataset(page, input, filter, filteredCount, { lineEnding = 
   await recordImportClickTarget(page, { sourceTransactions: input.transactions.length, lineEnding: JSON.stringify(lineEnding) });
   await activateCanonicalImport(page);
   await page.locator('#import-dialog').waitFor({ state: 'hidden' });
+  await activateButton(page, page.locator('[data-view="transactions"]'), 'import:operations-view');
   await page.locator('#tax-year').selectOption('2026');
+  await page.locator('#show-all-years').uncheck();
   await page.locator('#asset-filter').fill(filter);
-  assert.equal(await page.locator('#ledger-content tbody tr').count(), filteredCount, 'The screen filter must be active before exporting all operations.');
+  const inSelectedYear = input.transactions.filter(row => row.date.startsWith('2026')
+    && (!filter || row.asset.includes(filter) || row.receivedAsset?.includes(filter))).length;
+  assert.equal(await page.locator('#ledger-content tbody tr').count(), Math.min(inSelectedYear, 25),
+    'The selected year and asset filter must affect the visible list, independently of the exported report.');
+  // The existing PDF fixtures deliberately compare exports against a list spanning
+  // all years. The mobile-results suite separately verifies toggling this control.
+  await page.locator('#show-all-years').check();
+  assert.equal(await page.locator('#ledger-content tbody tr').count(), Math.min(filteredCount, 25), 'The screen filter must be active before exporting all operations.');
 }
 
 async function assertDownloadInvalidated(page, reason) {
@@ -274,7 +288,7 @@ async function verifyGuide(page) {
   const originalUrl = page.url();
   await checkpointViewport(page, 'guide:main-before-open');
   const newTab = page.context().waitForEvent('page');
-  await page.locator('#guide-link').click();
+  await activateButton(page, page.locator('#guide-link'), 'guide:open');
   const guide = await newTab;
   await guide.waitForLoadState('load');
   await checkpointViewport(page, 'guide:main-after-open');
@@ -287,7 +301,9 @@ async function verifyGuide(page) {
   assert.match(content, /CSV/);
   assert.equal(await guide.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'The guide must fit a mobile viewport.');
   await checkpointViewport(page, 'guide:main-before-guide-screenshot');
-  await guide.screenshot({ path: resolve(artifacts, 'guida-mobile.png'), fullPage: true });
+  // Keep very long guide captures at CSS resolution; Android DPR can otherwise
+  // exceed compositor image limits without changing the tested viewport.
+  await guide.screenshot({ scale: 'css', path: resolve(artifacts, 'guida-mobile.png'), fullPage: true });
   await checkpointViewport(page, 'guide:main-after-guide-screenshot');
   await checkpointViewport(guide, 'guide:new-tab-after-screenshot');
   assert.deepEqual(await guide.evaluate(() => window.__cspViolations), [], 'The guide must preserve the Content Security Policy.');
@@ -364,7 +380,7 @@ async function exportPdf(page, name, expectedRows, year, verify, { retry = false
   await page.locator('#pdf-download-notice').scrollIntoViewIfNeeded();
   await checkpointViewport(page, name + ':after-notice-scrollIntoView');
   await checkpointViewport(page, name + ':before-screenshot');
-  await page.screenshot({ path: resolve(artifacts, name + '-ui.png') });
+  await page.screenshot({ scale: 'css', path: resolve(artifacts, name + '-ui.png') });
   await checkpointViewport(page, name + ':after-screenshot');
 
   if (retry) {
@@ -527,10 +543,10 @@ async function verifyExchangeImport(page, label) {
   assert.equal(await page.evaluate(() => window.__exchangeXss === true), false);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, 'The review must not make the application wider than a mobile viewport.');
   await page.locator('#import-dialog').evaluate(dialog => { dialog.scrollTop = 0; });
-  await page.screenshot({ path: resolve(artifacts, 'exchange-' + label + '-wizard.png') });
+  await page.screenshot({ scale: 'css', path: resolve(artifacts, 'exchange-' + label + '-wizard.png') });
   const preview = review.locator('.exchange-review-preview');
   await preview.scrollIntoViewIfNeeded();
-  await page.screenshot({ path: resolve(artifacts, 'exchange-' + label + '-source-preview.png') });
+  await page.screenshot({ scale: 'css', path: resolve(artifacts, 'exchange-' + label + '-source-preview.png') });
   await page.locator('#confirm-import').click();
   await page.locator('#import-dialog').waitFor({ state: 'hidden' });
   await page.locator('#tax-year').selectOption('2025');
@@ -540,7 +556,7 @@ async function verifyExchangeImport(page, label) {
   assert.match(await page.locator('#metric-tax').textContent(), /22,53 €/);
   assert.match(await page.locator('#metric-cost').textContent(), /81,67 €/,
     'The residual basis must retain the original lot and the separately documented reward cost.');
-  await page.screenshot({ path: resolve(artifacts, 'exchange-' + label + '-result.png'), fullPage: true });
+  await page.screenshot({ scale: 'css', path: resolve(artifacts, 'exchange-' + label + '-result.png'), fullPage: true });
   const exported = await downloadSession(page, 'exchange-' + label + '-canonical-v2');
   const snapshot = parseCsv(exported);
   assert.equal(snapshot.version, 2);
@@ -686,7 +702,7 @@ async function verifyOpeningLotRecovery(page, label) {
   await assertOpeningReviewChoices(page, review);
   await page.waitForFunction(() => !document.getElementById('confirm-import').disabled);
   await review.locator('.exchange-review-balance-check').scrollIntoViewIfNeeded();
-  await page.screenshot({ path: resolve(artifacts, 'opening-recovery-' + label + '-ready.png') });
+  await page.screenshot({ scale: 'css', path: resolve(artifacts, 'opening-recovery-' + label + '-ready.png') });
   await activateButton(page, page.locator('#import-dialog').getByRole('button', { name: 'Annulla', exact: true }), 'opening-recovery');
   const withLot = parseCsv(await downloadSession(page, 'opening-recovery-' + label + '-lot-only'));
   assert.deepEqual(withLot.transactions, initial.transactions, 'Saving a lot and cancelling the CSV must not apply any source operation.');

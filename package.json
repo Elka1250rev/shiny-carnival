@@ -5,9 +5,10 @@
   "type": "module",
   "description": "Calcolatore locale di plusvalenze e minusvalenze crypto in regime dichiarativo italiano",
   "scripts": {
-    "test": "node tests/decimal.test.js && node tests/engine.test.js && node tests/csv-reader.test.js && node tests/csv.test.js && node tests/csv-v2.test.js && node tests/xlsx-reader.test.js && node tests/opening-import.test.js && node tests/exchange-csv.test.js && node tests/exchange-import.test.js && node tests/integration.test.js && node tests/transaction-order.test.js && node tests/import-session.test.js && node tests/pdf-report.test.js && node tests/pdf-document.test.js && node tests/pdf-download.test.js",
+    "test": "node tests/decimal.test.js && node tests/engine.test.js && node tests/csv-reader.test.js && node tests/csv.test.js && node tests/csv-v2.test.js && node tests/xlsx-reader.test.js && node tests/opening-import.test.js && node tests/exchange-csv.test.js && node tests/exchange-import.test.js && node tests/integration.test.js && node tests/transaction-order.test.js && node tests/import-session.test.js && node tests/ledger-view.test.js && node tests/pdf-report.test.js && node tests/pdf-document.test.js && node tests/pdf-download.test.js",
     "check": "node scripts/check.mjs",
     "test:pdf-browser": "node scripts/check-pdf-browser.mjs",
+    "test:mobile-browser": "node scripts/check-mobile-browser.mjs",
     "serve": "node scripts/serve.mjs"
   },
   "engines": {

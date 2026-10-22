@@ -15,7 +15,7 @@ const report = overrides => ({
   rows: [row('BTC')],
   notes: ['Gli importi sono arrotondati ai centesimi.'],
   lossSections: [],
-  recoveryNote: 'Usa “Esporta dati” per salvare il CSV ricaricabile.',
+  recoveryNote: 'Usa “Salva sessione CSV” per salvare il CSV ricaricabile.',
   disclaimer: { title: 'Avvertenza fiscale', text: 'Verifica i risultati prima di presentare la dichiarazione dei redditi.' },
   emptyNote: 'Non ci sono operazioni da riepilogare.',
   ...overrides

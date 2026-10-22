@@ -199,7 +199,7 @@ export function buildPdfReportData(result, openingDate) {
       'Gli importi fiscali e i costi attribuiti sono arrotondati ai centesimi per la lettura; i costi unitari sono mostrati fino a 18 decimali e possono essere approssimati per le divisioni non finite. Le commissioni originali del file conservano tutte le cifre. I totali fiscali e i costi complessivi sono calcolati con la precisione del motore: possono differire dalla somma degli importi arrotondati delle singole operazioni o dei singoli lotti.'
     ],
     lossSections: lossSections(tax),
-    recoveryNote: 'Questo PDF è un riepilogo e non può essere importato per riprendere la sessione. Usa “Esporta dati” per salvare il CSV ricaricabile. Il sito non registra i dati della sessione.',
+    recoveryNote: 'Questo PDF è un riepilogo e non può essere importato per riprendere la sessione. Usa “Salva sessione CSV” per salvare il CSV ricaricabile. Il sito non registra i dati della sessione.',
     disclaimer: {
       title: 'Avvertenza fiscale ed esclusione di responsabilità',
       text: 'CriptoConti è uno strumento informativo e di supporto al calcolo, non un servizio di consulenza fiscale. I risultati possono contenere errori: verifica i dati e i risultati, anche con l’assistenza di un professionista, prima di presentare la dichiarazione dei redditi. L’utente è responsabile dei dati inseriti e della propria dichiarazione. Nei limiti consentiti dalla legge, l’autore e il gestore del sito non rispondono di errori, omissioni, sanzioni o danni derivanti dall’utilizzo dei risultati. Restano ferme le responsabilità che non possono essere escluse per legge.'
