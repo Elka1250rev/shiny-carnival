@@ -12,6 +12,7 @@
   <link rel="stylesheet" href="./pdf-report.css">
   <link rel="stylesheet" href="./exchange-review.css">
   <link rel="stylesheet" href="./opening-review.css">
+  <link rel="stylesheet" href="./mobile.css">
   <script type="module" src="./app.js"></script>
 </head>
 <body>
@@ -19,9 +20,10 @@
   <aside class="sidebar" aria-label="Navigazione principale">
     <a class="brand" href="./"><span class="brand-mark" aria-hidden="true">↗</span><span>CriptoConti<span class="brand-caption">CALCOLATORE FISCALE</span></span></a>
     <div class="nav-caption">IL TUO PORTAFOGLIO</div>
-    <nav>
+    <button class="mobile-menu-toggle" id="mobile-menu-toggle" type="button" aria-expanded="false" aria-controls="portfolio-nav"><span><span class="mobile-menu-label">Sezione</span><strong id="mobile-current-view">Operazioni</strong></span><span class="mobile-menu-action">Menu <span aria-hidden="true">☰</span></span></button>
+    <nav id="portfolio-nav">
       <button class="nav-item active" data-view="transactions"><span aria-hidden="true">◫</span> Operazioni</button>
-      <button class="nav-item" data-view="holdings"><span aria-hidden="true">◈</span> Posizioni</button>
+      <button class="nav-item" data-view="holdings"><span aria-hidden="true">◈</span> Crypto possedute</button>
       <button class="nav-item" data-view="lots"><span aria-hidden="true">⊞</span> Situazione iniziale</button>
       <button class="nav-item" data-view="losses"><span aria-hidden="true">↙</span> Minusvalenze pregresse</button>
       <a class="nav-item" id="guide-link" href="./guida.html" target="_blank" rel="noopener noreferrer" aria-label="Come funziona (si apre in una nuova scheda)"><span aria-hidden="true">ⓘ</span> Come funziona <span aria-hidden="true">↗</span></a>
@@ -31,40 +33,67 @@
     <div class="sidebar-footer"><span class="status-dot"></span> Nessun dato trasmesso</div>
   </aside>
   <main id="main">
-    <header class="topbar"><div class="breadcrumb">Portafoglio <span>/</span> <strong id="breadcrumb-view">Operazioni</strong></div><div class="topbar-actions"><button class="button button-plain" id="import-button"><span aria-hidden="true">↥</span> Importa CSV</button><button class="button button-outline" id="export-button"><span aria-hidden="true">↧</span> Esporta dati</button></div></header>
+    <header class="topbar"><div class="breadcrumb">Portafoglio <span>/</span> <strong id="breadcrumb-view">Operazioni</strong></div><div class="topbar-actions"><button class="button button-plain" id="import-button"><span aria-hidden="true">↥</span> Importa CSV</button><button class="button button-outline" id="export-button"><span aria-hidden="true">↧</span> Salva sessione CSV</button></div></header>
     <div class="page-content">
       <aside class="session-notice" aria-labelledby="session-notice-title">
         <span class="session-notice-icon" aria-hidden="true">ⓘ</span>
-        <div><strong id="session-notice-title">Il sito non registra i tuoi dati.</strong><p>Le transazioni restano solo nella memoria di questa pagina. Prima di chiudere o ricaricare, usa <strong>Esporta dati</strong> per salvare il CSV. All’inizio di ogni nuova sessione usa <strong>Importa CSV</strong> per riprendere il lavoro.</p></div>
+        <div><strong id="session-notice-title">Il sito non registra i tuoi dati.</strong><p>Prima di chiudere o ricaricare, usa <strong>Salva sessione CSV</strong>. Alla prossima sessione riparti da <strong>Importa CSV</strong>. I dati restano solo in questa pagina.</p></div>
       </aside>
-      <section class="page-heading"><div><div class="eyebrow"><span class="tiny-diamond" aria-hidden="true"></span> CHIAREZZA, OPERAZIONE DOPO OPERAZIONE</div><h1>Il tuo portafoglio.<br><span>I tuoi conti, in chiaro.</span></h1><p>Dal primo acquisto al risultato fiscale. Tutto nel tuo browser.</p></div><div class="year-picker"><label for="tax-year">ANNO D’IMPOSTA</label><select id="tax-year"><option value="2026">2026</option><option value="2025">2025</option></select><span>Regime dichiarativo · Italia</span></div></section>
-      <div class="scope-note"><span aria-hidden="true">ⓘ</span><span>Calcolo per cripto-attività ordinarie: compravendite, permute e proventi verificati. Persone fisiche fuori impresa. <button class="text-button" id="scope-rules">Consulta il perimetro fiscale</button></span></div>
-      <section class="metric-grid" aria-label="Riepilogo dell'anno selezionato">
-        <article class="metric"><div class="metric-label">Risultato fiscale netto <span aria-hidden="true">↗</span></div><strong id="metric-net">0,00 €</strong><div class="metric-caption" id="metric-net-caption">Plusvalenze meno minusvalenze</div></article>
-        <article class="metric"><div class="metric-label">Imponibile dell’anno <span aria-hidden="true">◫</span></div><strong id="metric-taxable">0,00 €</strong><div class="metric-caption">Dopo le compensazioni ammesse</div></article>
-        <article class="metric metric-accent"><div class="metric-label">Imposta stimata <span class="rate-badge" id="metric-rate">33%</span></div><strong id="metric-tax">0,00 €</strong><div class="metric-caption" id="metric-tax-caption">Imposta sostitutiva · anno 2026</div></article>
-        <article class="metric"><div class="metric-label">Costo fiscale residuo <span aria-hidden="true">◈</span></div><strong id="metric-cost">0,00 €</strong><div class="metric-caption">Posizioni dopo tutte le operazioni</div></article>
+      <section class="page-heading">
+        <div><div class="eyebrow"><span class="tiny-diamond" aria-hidden="true"></span> IL TUO RIEPILOGO FISCALE</div><h1>I tuoi risultati, <span>in chiaro.</span></h1><p>Persone fisiche · Regime dichiarativo · Italia</p></div>
+        <div class="year-picker"><label for="tax-year">Anno d’imposta</label><select id="tax-year"><option value="2026">2026</option><option value="2025">2025</option></select><span>Riepilogo e operazioni dell’anno selezionato</span></div>
+      </section>
+      <section class="annual-summary" aria-label="Riepilogo dell’anno selezionato">
+        <div id="annual-warnings" class="warning-block annual-warnings" hidden></div>
+        <div class="metric-grid">
+          <article class="metric metric-accent"><div class="metric-label">Imposta stimata <span class="rate-badge" id="metric-rate">33%</span></div><strong id="metric-tax">0,00 €</strong><div class="metric-caption" id="metric-tax-caption">Imposta sostitutiva · anno 2026</div></article>
+          <article class="metric"><div class="metric-label">Risultato fiscale netto</div><strong id="metric-net">0,00 €</strong><div class="metric-caption" id="metric-net-caption">Plusvalenze e proventi meno minusvalenze</div></article>
+          <article class="metric"><div class="metric-label">Imponibile dell’anno</div><strong id="metric-taxable">0,00 €</strong><div class="metric-caption">Dopo le compensazioni ammesse</div></article>
+        </div>
+        <details class="panel tax-panel annual-breakdown">
+          <summary><span><strong>Come si arriva all’imposta</strong><span class="breakdown-year">Il conto dell’anno <span id="summary-year">2026</span></span></span><span class="breakdown-chevron" aria-hidden="true">⌄</span></summary>
+          <div class="annual-detail-content">
+            <div class="tax-flow">
+              <div><span id="summary-gains-label">Plusvalenze realizzate</span><strong id="summary-gains">0,00 €</strong></div>
+              <div><span>Proventi da detenzione / Earn</span><strong id="summary-income">0,00 €</strong></div>
+              <div><span>Minusvalenze realizzate</span><strong id="summary-losses">− 0,00 €</strong></div>
+              <div class="flow-total"><span>Risultato fiscale netto</span><strong id="summary-net">0,00 €</strong></div>
+              <div><span>Minusvalenze pregresse compensate</span><strong id="summary-used">− 0,00 €</strong></div>
+              <div class="flow-total"><span>Base imponibile</span><strong id="summary-taxable">0,00 €</strong></div>
+              <div class="flow-tax"><span>Imposta stimata</span><strong id="summary-tax">0,00 €</strong></div>
+            </div>
+            <div class="scope-note"><span aria-hidden="true">ⓘ</span><span>Cripto-attività ordinarie: compravendite, permute e proventi verificati. <button class="text-button" id="scope-rules">Metodo e perimetro fiscale</button></span></div>
+            <p class="small-note" id="summary-rate">Aliquota ordinaria del 33%</p>
+            <p class="small-note">I proventi qui indicati sono quelli classificati come redditi da detenzione. I premi classificati diversamente non sono inclusi in questa voce. La plusvalenza fiscale usa i lotti LIFO; il prezzo medio gestionale è un indicatore separato.</p>
+            <div class="loss-carry" id="carry-summary"></div>
+          </div>
+        </details>
       </section>
       <div class="workspace-grid">
         <section class="panel ledger-panel" aria-labelledby="view-title">
           <div class="panel-heading"><div><div class="eyebrow small" id="view-eyebrow">IL DIARIO DEL PORTAFOGLIO</div><h2 id="view-title">Le tue operazioni <span class="count-badge" id="record-count">0</span></h2></div><button class="button button-dark" id="add-button"><span aria-hidden="true">+</span> Nuova operazione</button></div>
-          <div class="ledger-toolbar"><div class="search-field"><span aria-hidden="true">⌕</span><label class="sr-only" for="asset-filter">Filtra per crypto</label><input id="asset-filter" type="search" placeholder="Cerca una crypto…" autocomplete="off"></div><div class="report-actions"><button class="text-button" id="opening-import-button" hidden>Importa situazione iniziale da Excel</button><button class="text-button" id="report-button"><span aria-hidden="true">↧</span> Prospetto CSV</button><button class="text-button" id="pdf-button" title="Scarica il riepilogo PDF di tutte le operazioni."><span aria-hidden="true">↧</span> Esporta PDF</button></div></div>
+          <div class="holding-cost-summary" id="holding-cost-summary" hidden><span>Costo fiscale residuo di tutte le crypto</span><strong id="metric-cost">0,00 €</strong><small>Dopo tutte le operazioni inserite, anche oltre l’anno selezionato. Non è il valore di mercato.</small></div>
+          <div class="ledger-toolbar">
+            <div class="ledger-filters"><div class="search-field"><span aria-hidden="true">⌕</span><label class="sr-only" for="asset-filter">Filtra per crypto</label><input id="asset-filter" type="search" placeholder="Cerca una crypto…" autocomplete="off"></div><label class="ledger-year-filter" id="ledger-year-filter"><input id="show-all-years" type="checkbox"><span>Mostra tutti gli anni</span></label></div>
+            <div class="report-actions"><button class="button button-outline" id="opening-import-button" hidden>Importa situazione iniziale da Excel</button><button class="button button-outline" id="pdf-button" title="Scarica il riepilogo PDF di tutte le operazioni."><span aria-hidden="true">↧</span> Scarica riepilogo PDF</button><button class="button button-outline" id="report-button"><span aria-hidden="true">↧</span> Scarica prospetto CSV</button></div>
+          </div>
+          <p class="ledger-filter-info" id="ledger-filter-info" aria-live="polite"></p>
+          <p class="report-help" id="report-help">PDF e prospetto CSV comprendono tutte le operazioni, anche quelle escluse dai filtri. Per riprendere il lavoro usa <strong>Salva sessione CSV</strong>.</p>
           <div class="pdf-download-notice" id="pdf-download-notice" hidden>
             <p id="pdf-download-status" role="status" aria-live="polite"></p>
             <a class="button button-outline" id="pdf-download-link" target="_blank" rel="noopener noreferrer" hidden>Scarica il PDF</a>
-            <p>Per riprendere la sessione, conserva anche il CSV ottenuto con “Esporta dati”.</p>
+            <p>Per riprendere la sessione, conserva anche il CSV ottenuto con “Salva sessione CSV”.</p>
           </div>
           <div id="ledger-content"></div>
+          <nav class="ledger-pagination" id="ledger-pagination" aria-label="Pagine delle operazioni" hidden><button class="button button-outline" id="ledger-prev" type="button">Precedente</button><span id="ledger-page-info" role="status" aria-atomic="true"></span><button class="button button-outline" id="ledger-next" type="button">Successiva</button></nav>
           <div class="panel-footer"><span id="ledger-footnote">Le operazioni sono ordinate per data e sequenza.</span><button class="text-button" id="demo-button">Prova con un esempio <span aria-hidden="true">↗</span></button></div>
         </section>
-        <aside class="summary-column">
-          <section class="panel tax-panel"><div class="eyebrow small">DAL RISULTATO ALL’IMPOSTA</div><h2>Il conto dell’anno <span id="summary-year">2026</span></h2><div class="tax-flow"><div><span id="summary-gains-label">Plusvalenze realizzate</span><strong id="summary-gains">0,00 €</strong></div><div><span>Minusvalenze realizzate</span><strong id="summary-losses">− 0,00 €</strong></div><div><span>Pregresse compensate</span><strong id="summary-used">− 0,00 €</strong></div><div class="flow-total"><span>Base imponibile</span><strong id="summary-taxable">0,00 €</strong></div></div><p class="small-note" id="summary-income"></p><div class="tax-result"><span>IMPOSTA STIMATA</span><strong id="summary-tax">0,00 €</strong><small id="summary-rate">Aliquota ordinaria del 33%</small></div><p class="small-note">La plusvalenza fiscale usa i lotti LIFO. Il prezzo medio gestionale rimane un indicatore separato.</p><div class="loss-carry" id="carry-summary"></div></section>
+      </div>
           <div class="session-info">
-            <section class="privacy-card"><div class="privacy-icon" aria-hidden="true">⌘</div><div><h3>La tua sessione è temporanea.</h3><p>Ricaricando o chiudendo la pagina, i dati vanno persi. Il CSV è il tuo salvataggio.</p><button class="text-button" id="privacy-export">Esporta la sessione <span aria-hidden="true">↗</span></button></div></section>
+            <section class="privacy-card"><div class="privacy-icon" aria-hidden="true">⌘</div><div><h3>La tua sessione è temporanea.</h3><p>Ricaricando o chiudendo la pagina, i dati vanno persi. Il CSV è il tuo salvataggio.</p><button class="text-button" id="privacy-export">Salva sessione CSV <span aria-hidden="true">↗</span></button></div></section>
             <section class="liability-notice" aria-labelledby="liability-notice-title"><strong id="liability-notice-title">Avvertenza fiscale ed esclusione di responsabilità</strong><p>CriptoConti è uno strumento informativo e di supporto al calcolo, non un servizio di consulenza fiscale. I risultati possono contenere errori: verifica i dati e i risultati, anche con l’assistenza di un professionista, prima di presentare la dichiarazione dei redditi. L’utente è responsabile dei dati inseriti e della propria dichiarazione. Nei limiti consentiti dalla legge, l’autore e il gestore del sito non rispondono di errori, omissioni, sanzioni o danni derivanti dall’utilizzo dei risultati. Restano ferme le responsabilità che non possono essere escluse per legge.</p></section>
           </div>
-        </aside>
-      </div>
+
       <footer class="page-footer"><span>CriptoConti <span class="footer-separator">/</span> Un conto chiaro, senza un account.</span><button class="text-button" id="config-button">Situazione al <span id="opening-date-label">01/01/2025</span> <span aria-hidden="true">⚙</span></button><button class="text-button danger-text" id="clear-button">Svuota sessione</button></footer>
     </div>
   </main>
@@ -93,7 +122,7 @@
       <h3>4. Conferma la nuova situazione iniziale</h3>
       <label class="exchange-review-check"><input id="opening-costs-confirm" type="checkbox"><span id="opening-costs-label">Ho verificato quantità, date originarie e costi fiscali documentati dei singoli lotti, esclusi commissioni e oneri accessori.</span></label>
       <label class="exchange-review-check"><input id="opening-replace-confirm" type="checkbox"><span>Confermo la sostituzione di tutti i lotti iniziali e della data di apertura. Le operazioni e le minusvalenze già presenti saranno conservate e convalidate con questi saldi.</span></label>
-      <p class="small-note">Solo «Importa situazione iniziale» applica i dati. Annullando, la sessione rimane invariata. Dopo la conferma usa «Esporta dati» per salvare i lotti nel CSV ricaricabile; conserva anche l’Excel originale per note, liquidità e valori informativi.</p>
+      <p class="small-note">Solo «Importa situazione iniziale» applica i dati. Annullando, la sessione rimane invariata. Dopo la conferma usa «Salva sessione CSV» per salvare i lotti nel CSV ricaricabile; conserva anche l’Excel originale per note, liquidità e valori informativi.</p>
     </section>
     <div id="opening-status" role="status" aria-live="polite" hidden></div>
     <div class="modal-actions"><button class="button button-outline" data-close="opening-import-dialog">Annulla</button><button id="confirm-opening-import" class="button button-dark" disabled>Importa situazione iniziale</button></div>

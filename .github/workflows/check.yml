@@ -23,6 +23,32 @@ jobs:
       - name: Controllo progetto
         run: npm run check
 
+  mobile-browser:
+    name: Interfaccia mobile in Chrome
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Playwright per i test
+        env:
+          PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+        run: npm install --no-save --package-lock=false --ignore-scripts playwright@1.64.1
+      - name: Consultazione risultati su mobile e desktop
+        run: npm run test:mobile-browser
+      - name: Anteprime e risultati delle prove
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobile-browser-checks
+          path: /tmp/criptoconti-mobile-checks
+          if-no-files-found: ignore
+          retention-days: 7
+
   pdf-browser:
     name: PDF in Chrome
     runs-on: ubuntu-latest
